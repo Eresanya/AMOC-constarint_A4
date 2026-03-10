@@ -1,0 +1,105 @@
+clc;clear
+%% --- Load data ---
+% load('obs_max_correlation.mat');       % obs_corr.max_r
+load('obs_AMOC_ZOS_all.mat')
+load('AMOC_ZOS_scalar_corr_1850_2014.mat');  % best_r_CI
+
+r_obs   = maxCorr;   % scalar
+r_model = best_r_CI;        % vector
+model_name = { ...
+    'BCC-CSM2-MR','CAMS-CSM1-0','CanESM5','CESM2','CESM2-WACCM','CNRM-CM6-1', ...
+    'CNRM-CM6-1-HR','E3SM-1-1','FIO-ESM-2-0','HadGEM3-GC31-LL', ...
+    'HadGEM3-GC31-MM','INM-CM4-8','INM-CM5-0','IPSL-CM6A-LR', ...
+    'MPI-ESM1-2-HR','MRI-ESM2-0','NESM3','NorESM2-LM', ...
+    'SAM0-UNICON','UKESM1-0-LL'};
+
+%% --- Compute exponential weights ---
+alpha = 5; % tuning factor
+weights = exp(-alpha * (r_obs - r_model).^2 / r_obs^2);
+weighted_avg_r = sum(weights .* r_model) / sum(weights);
+fprintf('Exponential weighted average correlation: %.3f\n', weighted_avg_r);
+
+%% --- Weight threshold ---
+weight_threshold = 0.1;   % models above this are "constrained"
+
+%% --- Sort models by correlation ---
+[r_sorted, sortIdx] = sort(r_model,'descend');
+weights_sorted = weights(sortIdx);
+model_sorted = model_name(sortIdx);
+
+%% --- Save weights for reference ---
+model_weights.model   = model_sorted(:)';
+model_weights.r_model = r_sorted(:)';
+model_weights.weight  = weights_sorted(:)';
+
+save('model_exponential_weights.mat','model_weights');
+T = table(model_sorted(:), r_sorted(:), weights_sorted(:), ...
+          'VariableNames', {'Model','Correlation_r','ExpWeight'});
+writetable(T,'model_exponential_weights.csv');
+fprintf('Exponential weights saved to model_exponential_weights.mat and .csv\n');
+
+%% --- Colors ---
+col_constraint   = [0 0.45 0.74];  % blue
+col_unconstraint = [0.85 0.33 0.10]; % red
+
+%% --- Plot with improved layout for publication ---
+figure('Color','w','Position',[100,100,1500,600]);
+hold on; box on;
+
+max_bar_width = max(r_sorted)*1.05;
+
+for i = 1:length(r_sorted)
+    if weights_sorted(i) > weight_threshold
+        % Blue gradient based on weight
+        col = col_constraint * weights_sorted(i) + [0.8 0.8 0.8]*(1-weights_sorted(i));
+    else
+        % Red for farthest models
+        col = col_unconstraint;
+    end
+    
+    barh(i, r_sorted(i), 'FaceColor', col, 'EdgeColor', 'k', 'LineWidth',1.2);
+    
+    % Numeric weight label
+    % text(r_sorted(i)+0.01*max_bar_width, i, sprintf('%.2f', weights_sorted(i)), ...
+    %      'VerticalAlignment','middle','FontSize',10);
+end
+
+%% --- Observed correlation line ---
+xline(r_obs,'r--','LineWidth',2);
+text(r_obs+0.01*max_bar_width, length(r_sorted)+0.5, sprintf('Obs r = %.2f', r_obs), ...
+     'Color','r','FontWeight','bold');
+
+%% --- Axes & labels ---
+yticks(1:length(r_sorted));
+yticklabels(model_sorted);
+ytickangle(0);
+xlabel('AMOC–ZOS correlation (r)','FontWeight','bold');
+ylabel('Models','FontWeight','bold');
+title(sprintf('(b)Models Ranked by Exponential Weighted Consistency (Weighted Avg r = %.3f)', weighted_avg_r), ...
+      'FontWeight','bold');
+
+grid on;
+ax = gca;
+ax.GridColor = [0.8 0.8 0.8];
+ax.GridAlpha = 0.5;
+xlim([-0.05, max_bar_width*1.1]);
+set(findall(gcf,'Type','axes'),'FontSize',12,'LineWidth',1.2);
+
+%% --- Colorbar for weights (left side) ---
+colormap(gca, [linspace(0.8, col_constraint(1), 256)' ...
+               linspace(0.8, col_constraint(2), 256)' ...
+               linspace(0.8, col_constraint(3), 256)']);
+c = colorbar('westoutside');  % move to left side
+c.Label.String = 'Exponential weight (closeness to obs)';
+c.Label.FontWeight = 'bold';
+c.FontSize = 11;
+c.Ticks = [0 1];
+c.TickLabels = {'Low','High'};
+
+%% --- Legend (right side) ---
+h1 = barh(NaN, NaN, 'FaceColor', col_constraint, 'EdgeColor','k');
+h2 = barh(NaN, NaN, 'FaceColor', col_unconstraint, 'EdgeColor','k');
+h3 = xline(NaN,'r--','LineWidth',2);
+
+legend([h1 h2 h3], {'Constrained', 'Others', 'Obs r'}, ...
+       'Location','eastoutside', 'FontSize',10);
