@@ -1,0 +1,331 @@
+clear; clc;
+
+%% === Setup Paths ===
+basedir = '/Users/emmanueleresanya/Desktop/Mac/AMOC_Sealevel_Constraint/CMIP6/Gerard_AMOC_zos/psmsl_amoc_index/AMOC_constraints/';
+datadir = fullfile(basedir, 'data');
+figdir  = fullfile(basedir, 'figures');
+%% === Load Data ===
+load(fullfile(datadir, 'ssh')); % ssh.sla, ssh.time, ssh.lon, ssh.lat
+
+% Copernicus AMOC reanalysis
+ncfile = '/Users/emmanueleresanya/Desktop/Mac/AMOC_Sealevel_Constraint/CMIP6/Gerard_AMOC_zos/psmsl_amoc_index/GLOBAL_OMI_NATLANTIC_amoc_max26n_timeseries_19930115_P20220428.nc';
+reanal.amoc = ncread(ncfile, 'amoc_mean');
+reanal.time = ncread(ncfile, 'time') + datenum(1950,1,1);
+
+% Remove first (possibly corrupt) month
+ssh.sla(:,:,1) = [];
+ssh.time(1) = [];
+
+%% === Detrend SSH (Vectorized) ===
+[nlon, nlat, ntime] = size(ssh.sla);
+sla_2d = reshape(ssh.sla, nlon*nlat, ntime);
+sla_2d = detrend(sla_2d')'; % detrend along time dimension
+ssh.sla = reshape(sla_2d, nlon, nlat, ntime);
+
+%% === Annual Averaging ===
+% Convert time to year
+dvec = datevec(ssh.time);
+yrs = unique(dvec(:,1));
+nyrs = length(yrs);
+ssh.sla_yr = nan(nlon, nlat, nyrs);
+
+% Average monthly SSH to yearly mean for each grid cell
+for k = 1:nyrs
+    idx = dvec(:,1) == yrs(k);
+    ssh.sla_yr(:,:,k) = mean(ssh.sla(:,:,idx), 3, 'omitnan');
+end
+
+%% === AMOC Reference Index ===
+dvec_amoc = datevec(reanal.time);
+yrs_amoc = 1993:2019;
+ref_amoc = arrayfun(@(y) mean(reanal.amoc(dvec_amoc(:,1)==y), 'omitnan'), yrs_amoc);
+
+%% === ZOS Coastal Index ===
+% Define boxes in Southern and Northern Atlantic
+lon = ssh.lon; lat = ssh.lat;
+zos_data = ssh.sla_yr;
+
+% Southern Box coordinates
+x1 = 285; x2 = 305;
+y1 = 29; y2 = 39;
+
+% Northern Box coordinates
+x3 = 302; x4 = 322;
+y3 = 43; y4 = 53;
+
+% Logical masks for the boxes
+lon_coast1 = lon>=x1 & lon<=x2; lat_coast1 = lat>=y1 & lat<=y2;
+lon_coast2 = lon>=x3 & lon<=x4; lat_coast2 = lat>=y3 & lat<=y4;
+
+% Compute mean SSH anomaly in each box
+coast_mean1 = squeeze(mean(mean(zos_data(lon_coast1,lat_coast1,:),1,'omitnan'),2,'omitnan'));
+coast_mean2 = squeeze(mean(mean(zos_data(lon_coast2,lat_coast2,:),1,'omitnan'),2,'omitnan'));
+
+% Define coastal index as difference between Southern and Northern boxes
+zos_coast_obs = coast_mean1 - coast_mean2;
+zos_coast_obs = zos_coast_obs - mean(zos_coast_obs,'omitnan'); % remove mean
+% zos_coast_obs = (zos_coast_obs - mean(zos_coast_obs)) / std(zos_coast_obs);
+%% === Trim to Desired End Year ===
+yrs_end = 2019;
+yrs_trimmed = yrs(yrs <= yrs_end);
+
+% Align lengths of all datasets
+ref_amoc = ref_amoc(1:length(yrs_trimmed));
+zos_coast_obs = zos_coast_obs(1:length(yrs_trimmed));
+zos_data = zos_data(:,:,1:length(yrs_trimmed));
+
+% Normalize AMOC
+ref_amoc = ref_amoc / 1e7; % convert transport to ~Sv scale
+%% === Prepare AMOC and ZOS Time Series ===
+% === Standardize and Smooth Time Series ===
+amoc_std = (ref_amoc - mean(ref_amoc,'omitnan')) ./ std(ref_amoc,'omitnan');
+zos_std  = (zos_coast_obs - mean(zos_coast_obs,'omitnan')) ./ std(zos_coast_obs,'omitnan');
+
+% 5-year smoothing
+window = 5;
+amoc_s = movmean(amoc_std, window, 'omitnan');
+zos_s  = movmean(zos_std,  window, 'omitnan');
+
+%% === Lagged Correlation Analysis ===
+
+maxLag = 10;   % maximum lag in years
+lags = 0:maxLag;
+
+corrVals = nan(size(lags));
+pVals    = nan(size(lags));
+
+for k = 1:length(lags)
+
+    lag = lags(k);
+
+    % Align time series for this lag
+    am = amoc_s(1:end-lag);
+    zo = zos_s(1+lag:end);
+
+    % Correlation
+    [R,P] = corrcoef(am,zo,'rows','complete');
+
+    corrVals(k) = R(1,2);
+    pVals(k)    = P(1,2);
+
+end
+
+%% --- Print lag correlations ---
+fprintf('\nLagged correlations (AMOC leads ZOS):\n');
+for k = 1:length(lags)
+    fprintf('Lag = %2d yr: r = %.3f\n', lags(k), corrVals(k));
+end
+
+%% --- Determine best lag ---
+[maxCorr, idx] = max(corrVals);
+bestLag = lags(idx);
+
+fprintf('\nMaximum correlation = %.3f at lag = %d years\n', maxCorr, bestLag);
+
+%% --- Align series using best lag (FOR SCATTER PLOT ONLY) ---
+amoc_lag = amoc_s(1:end-bestLag);
+zos_lag  = zos_s(1+bestLag:end);
+
+%% --- Zero-lag correlation ---
+[r_zero, p_zero] = corrcoef(amoc_s, zos_s,'rows','complete');
+
+fprintf('Zero-lag correlation r = %.3f\n', r_zero(1,2));
+
+
+%% === Compute Correlation Map at Best Lag ===
+at_lag = bestLag;
+[rmap_coast, rmax_coast, pmap_coast] = computeCorrMaps(zos_data, amoc_s, at_lag);
+
+%% === Shift Lon for Plotting ===
+lonplot = lon; lonplot(lonplot>180) = lonplot(lonplot>180)-360;
+
+%==Add metadata ======
+analysis_info.dataset = 'Copernicus AMOC reanalysis + altimetry SSH';
+analysis_info.smoothing_window = window;
+analysis_info.max_lag_tested = maxLag;
+analysis_info.time_range = [yrs_trimmed(1) yrs_trimmed(end)];
+analysis_info.coastal_index_definition = 'South box minus North box';
+
+%% === Store Correlation Summary ===
+obs_corr.max_r    = maxCorr;
+obs_corr.best_lag = bestLag;
+obs_corr.corrVals = corrVals;
+obs_corr.pVals    = pVals;
+obs_corr.lags     = lags;
+
+obs_corr.r_zero   = r_zero(1,2);
+obs_corr.p_zero   = p_zero(1,2);
+%% === Save All Computed Data for Reproducibility ===
+
+obs_plot_params.lon        = lon;
+obs_plot_params.lat        = lat;
+obs_plot_params.lonplot    = lonplot;
+
+obs_plot_params.rmap_coast = rmap_coast;
+obs_plot_params.rmax_coast = rmax_coast;
+obs_plot_params.pmap_coast = pmap_coast;
+
+obs_plot_params.at_lag     = at_lag;
+
+obs_plot_params.zos_data   = zos_data;
+obs_plot_params.zos_coast_obs = zos_coast_obs;
+
+obs_plot_params.amoc_std   = amoc_std;
+obs_plot_params.amoc_s     = amoc_s;
+
+obs_plot_params.coast_boxes.south = [x1 x2 y1 y2];
+obs_plot_params.coast_boxes.north = [x3 x4 y3 y4];
+
+save(fullfile('obs_AMOC_ZOS_all.mat'), ...
+    'ssh', ...
+    'zos_data', ...
+    'zos_coast_obs', ...
+    'ref_amoc', ...
+    'amoc_std','zos_std', ...
+    'amoc_s','zos_s', ...
+    'lags','corrVals','pVals', ...
+    'bestLag','maxCorr', ...
+    'r_zero','p_zero', ...
+    'rmap_coast','rmax_coast','pmap_coast', ...
+    'obs_plot_params', ...
+    'obs_corr', ...
+    'analysis_info',...
+    'yrs_trimmed', ... 
+    '-v7.3');
+%% === Figure: TS, Scatter, Map, Lag Plot ===
+
+% === Consistent CMIP6 Color Scheme ===
+col_amoc_dark  = [0.20 0.40 0.80];   % AMOC (blue)
+col_zos_dark   = [0.85 0.33 0.10];   % ZOS / coastal index (red-orange)
+
+% --- Plot Figures ---
+figure('Color','w','Position',[100 100 1500 700]);
+t = tiledlayout(2,2,'TileSpacing','compact','Padding','compact');
+
+% --- Panel (a): Full-basin correlation map ---
+nexttile(1)
+hold on
+% pcolor(lonplot, lat, rmap_coast'); shading flat; axis xy
+pcolor(lonplot, lat, rmax_coast'); shading flat; axis xy
+% --- Load coastline ---
+na = load('na.dat');
+coastlon = na(:,1);
+coastlat = na(:,2);
+
+% --- Fill continents black ---
+patch([-180 -180 180 180], [-90 90 90 -90], 'k', ...
+      'EdgeColor','none');
+
+% --- Redraw ocean map on top ---
+pcolor(lonplot, lat, rmax_coast'); 
+shading flat
+colormap(cmocean('balance'))
+caxis([-1 1])
+
+% --- Draw coastline outline ---
+plot(coastlon, coastlat,'k','LineWidth',1.2)
+caxis([-1 1]); colorbar
+ylim([0 60]); xlim([-90 0]);
+set(gca,'YTick',0:10:60,'YTickLabel',{'0','10°N','20°N','30°N','40°N','50°N','60°N'});
+set(gca,'XTick',-90:20:0,'XTickLabel',{'90°W','70°W','50°W','30°W','10°W'});
+xlabel('Longitude','FontWeight','bold','FontSize',12);
+ylabel('Latitude','FontWeight','bold','FontSize',12);
+% title('(a) Correlation: AMOC vs ZOS','FontWeight','bold');
+title(sprintf('(a) Correlation: AMOC vs ZOS (lag = %d yr)',bestLag))
+box on
+
+% Overlay coastal boxes
+plot([x1 x2 x2 x1 x1]-360, [y1 y1 y2 y2 y1],'k-','Color',[0 0 0 0.7],'LineWidth',1.3);
+text(x1+5-360, y1+5,'South','FontSize',10,'FontWeight','bold','BackgroundColor','w','Margin',1);
+plot([x3 x4 x4 x3 x3]-360, [y3 y3 y4 y4 y3],'Color',[0 0 0 0.7],'LineWidth',1.3);
+text(x3+8-360, y3+5,'North','FontSize',10,'FontWeight','bold','BackgroundColor','w','Margin',1);
+na = load('na.dat');
+coastlon = na(:,1);
+coastlat = na(:,2);
+
+% Overlay significant points
+[sig_lon_idx, sig_lat_idx] = find(pmap_coast <= 0.05);
+subsample = 40;
+sig_lon_idx = sig_lon_idx(mod(1:length(sig_lon_idx), subsample) == 1);
+sig_lat_idx = sig_lat_idx(mod(1:length(sig_lat_idx), subsample) == 1);
+scatter(lonplot(sig_lon_idx), lat(sig_lat_idx), 7, 'k', 'filled');
+
+colormap(cmocean('balance')); caxis([-1 1]);
+set(gcf,'Color','w');
+
+% --- Panel (b): Zero-lag time series ---
+% nexttile(2)
+% hold on
+% plot(yrs_trimmed, amoc_s,'LineWidth',2.5,'Color',col_amoc_dark)
+% plot(yrs_trimmed, zos_s ,'LineWidth',2.5,'Color',col_zos_dark)
+
+% --- Panel (b): Zero-lag time series ---
+nexttile(2)
+hold on
+
+% Plot time series and store handles
+h_amoc = plot(yrs_trimmed, amoc_s,'LineWidth',2.5,'Color',col_amoc_dark);
+h_zos  = plot(yrs_trimmed, zos_s ,'LineWidth',2.5,'Color',col_zos_dark);
+
+yline(0,'k--','HandleVisibility','off')
+
+% Add legend
+legend([h_amoc, h_zos], {'AMOC','Zoscoast'}, 'Location','northwest', 'FontSize',10, 'Box','off');
+
+% Optional: display zero-lag correlation as text
+text(yrs_trimmed(2), max(amoc_s)*0.8, sprintf('r = %.2f', r_zero(1,2)))
+title('(b) 5-yr Smoothed AMOC and ZOS')
+xlabel('Year'); ylabel('Standardized Anomaly')
+text(yrs_trimmed(2), max(amoc_s)*0.8, sprintf('r = %.2f', r_zero(1,2)))
+
+% --- Panel (c): Lagged scatter ---
+nexttile(3)
+hold on
+scatter(amoc_lag, zos_lag, 80, col_zos_dark,'filled')
+pfit = polyfit(amoc_lag, zos_lag, 1);
+xfit = linspace(min(amoc_lag), max(amoc_lag), 50);
+plot(xfit, polyval(pfit,xfit),'--','Color',col_zos_dark,'LineWidth',2)
+grid on; box on
+xlabel('AMOC (standardized)')
+ylabel('ZOS Coastal Index (standardized)')
+title(sprintf('(c) Lagged AMOC → ZOS (lag = %d yr)', bestLag))
+text(min(amoc_lag), max(zos_lag)*0.85, sprintf('r = %.2f (lag = %d yr)', maxCorr, bestLag))
+
+% --- Panel (d): Lag vs correlation stem plot ---
+nexttile(4)
+stem(lags, corrVals, 'filled')
+xlabel('Lag (years)'); ylabel('Correlation')
+title('Lagged correlation AMOC → ZOS')
+grid on
+
+%% === Function: Compute Correlation Maps with Lag ===
+function [rmap, rmax, pmap] = computeCorrMaps(zos_data, ref, at_lag)
+[nlon, nlat, nyrs] = size(zos_data);
+
+% Preallocate
+rmap = nan(nlon, nlat);
+pmap = nan(nlon, nlat);
+rmax = nan(nlon, nlat);
+
+zos_2d = reshape(zos_data, nlon*nlat, nyrs);
+ref_vec = ref(:)';
+
+for ii = 1:size(zos_2d,1)
+    ts = zos_2d(ii,:);
+    if all(isnan(ts)), continue; end
+
+    % Correlation
+    [R,P] = corrcoef(ts(:), ref_vec(:), 'rows','complete');
+    rmap(ii) = R(1,2);
+    pmap(ii) = P(1,2);
+
+    % Cross-correlation at lag
+    [corrVals, lags] = xcorr(ref_vec, ts, at_lag, 'coeff');
+    rmax(ii) = corrVals(lags == at_lag);
+end
+
+% Reshape to 2D
+rmap = reshape(rmap, nlon, nlat);
+pmap = reshape(pmap, nlon, nlat);
+rmax = reshape(rmax, nlon, nlat);
+end 
