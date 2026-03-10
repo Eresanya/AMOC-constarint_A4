@@ -1,0 +1,207 @@
+%% ============================================================
+%  AMOC (26.5°N) – CMIP6 SSP585 & SSP126 + TG Constraint
+%  1850–2100 | 5-year running mean | Baseline: 1850–2014
+% =============================================================
+
+clc; clear;
+
+%% -------------------- USER PARAMETERS -----------------------
+ncfile585 = 'CMIP6_AMOC_ssp585_26N.nc';
+ncfile126 = 'CMIP6_AMOC_ssp126_26N.nc';
+%%
+load('TG_adjstd_SSH.mat');   % provides amoc_obs_from_tg_full
+%%
+years_full = 1850:2100;
+hist_ref_idx = years_full <= 2014;
+fut_idx = years_full > 2014;
+win = 5;   % running mean
+
+models_target = { ...
+    'BCC-CSM2-MR','CAMS-CSM1-0','CanESM5','CESM2', ...
+    'CESM2-WACCM','E3SM-1-1','FGOALS-f3-L','GISS-E2-1-G', ...
+    'INM-CM4-8','INM-CM5-0','IPSL-CM6A-LR','MIROC6','NESM3','NorESM2-LM'};
+
+model_constraint = { ...
+    'CanESM5','CESM2-WACCM','CNRM-CM6-1-HR','FIO-ESM-2-0','HadGEM3-GC31-LL',...
+    'BCC-CSM2-MR','CAMS-CSM1-0','CESM2','CNRM-CM6-1','HadGEM3-GC31-MM', ...
+    'MPI-ESM1-2-HR','SAM0-UNICON','MRI-ESM2-0','NESM3','NorESM2-LM','UKESM1-0-LL'};
+%% -------------------- SCENARIO PROCESSOR --------------------
+processScenario = @(ncfile) ...
+    (function_process(ncfile, models_target, model_constraint, ...
+                      years_full, hist_ref_idx, win));
+[ens585_mean, ens585_std, trend585_hist, trend585_fut] = ...
+    processScenario(ncfile585);
+
+[ens126_mean, ens126_std, trend126_hist, trend126_fut] = ...
+    processScenario(ncfile126);
+
+%% -------------------- TG PROCESSING -------------------------
+tg_years = 1880:2025;
+tg_mask = tg_years >= 1850 & tg_years <= 2100;
+
+tg_smooth = movmean(amoc_obs_from_tg_full(tg_mask), win, 'omitnan');
+
+tg_baseline = mean(tg_smooth(tg_years(tg_mask) <= 2014), 'omitnan');
+tg_anom = tg_smooth - tg_baseline;
+
+%% ================= HISTORICAL CORRELATION =================
+
+% Define overlapping historical years explicitly
+common_years = 1940:2014;
+
+% Indices in CMIP6
+idx_cmip = ismember(years_full, common_years);
+
+% Indices in TG
+idx_tg = ismember(tg_years(tg_mask), common_years);
+
+% Extract aligned data
+cmip6_hist_overlap = ens585_mean(idx_cmip);
+tg_hist_overlap    = tg_anom(idx_tg);
+
+% Now compute correlation
+[r_hist, p_hist] = corr(cmip6_hist_overlap', tg_hist_overlap, ...
+                        'Rows','complete');
+%% ===================== PUBLICATION FIGURE ====================
+
+figure('Color','w','Units','inches','Position',[1 1 9 5]);
+hold on;box on;grid on;
+
+% --- Historical shading (SSP585 only) ---
+fill([years_full(hist_ref_idx) fliplr(years_full(hist_ref_idx))], ...
+     [ens585_mean(hist_ref_idx)+ens585_std(hist_ref_idx) ...
+     fliplr(ens585_mean(hist_ref_idx)-ens585_std(hist_ref_idx))], ...
+     [0.75 0.85 1], 'EdgeColor','none','FaceAlpha',0.25);
+
+% --- Future shading SSP585 ---
+fill([years_full(fut_idx) fliplr(years_full(fut_idx))], ...
+     [ens585_mean(fut_idx)+ens585_std(fut_idx) ...
+      fliplr(ens585_mean(fut_idx)-ens585_std(fut_idx))], ...
+     [1 0.7 0.7], 'EdgeColor','none','FaceAlpha',0.25);
+
+% --- Future shading SSP126 ---
+fill([years_full(fut_idx) fliplr(years_full(fut_idx))], ...
+     [ens126_mean(fut_idx)+ens126_std(fut_idx) ...
+      fliplr(ens126_mean(fut_idx)-ens126_std(fut_idx))], ...
+     [0.7 0.85 1], 'EdgeColor','none','FaceAlpha',0.25);
+
+% --- Ensemble means ---
+% h585 = plot(years_full, ens585_mean, 'Color',[1 0.7 0.7], 'LineWidth',2.2);
+% h126 = plot(years_full, ens126_mean, 'Color',[0.7 0.85 1], 'LineWidth',2.2);
+% ================= ENSEMBLE MEANS =================
+
+% ---- Historical (shared baseline) ----
+hHist = plot(years_full(hist_ref_idx), ...
+             ens585_mean(hist_ref_idx), ...
+             'k','LineWidth',2.2);
+
+% ---- SSP585 Future (red) ----
+h585 = plot(years_full(fut_idx), ...
+            ens585_mean(fut_idx), ...
+            'Color',[0.8 0 0], ...
+            'LineWidth',2.2);
+
+% ---- SSP126 Future (blue) ----
+h126 = plot(years_full(fut_idx), ...
+            ens126_mean(fut_idx), ...
+            'Color',[0 0.25 0.8], ...
+            'LineWidth',2.2);
+% --- TG overlay (scaled visually only) ---
+hTG = plot(tg_years(tg_mask), tg_anom*5, ...
+           'Color',[0.1 0.1 0.1], ...
+           'LineStyle','--','LineWidth',1.8);
+
+% --- Historical/Future divider ---
+xline(2014,'k--','LineWidth',1);
+
+% --- Axis styling (Nature style) ---
+xlim([1850 2100])
+ylim([-15 5])
+set(gca,'FontName','Helvetica',...
+        'FontSize',10,...
+        'LineWidth',1,...
+        'TickDir','in',...
+        'Box','off');
+
+xlabel('Year')
+ylabel('AMOC anomaly (Sv)')
+
+% legend([h585 h126 hTG], ...
+%        {'SSP585 (constrained)','SSP126 (constrained)','Tide-gauge AMOC'}, ...
+%        'Location','northeast','Box','off');
+legend([hHist h585 h126 hTG], ...
+       {'Historical','SSP585','SSP126','Tide-gauge AMOC'}, ...
+       'Location','northeast','Box','off');
+% ================= TREND ANNOTATION =================
+
+% Position for text (bottom-left clean placement)
+x_text = 1860;
+y_text_585 = -13;
+y_text_126 = -14.2;
+
+% SSP585 future trend (red)
+text(x_text, y_text_585, ...
+     sprintf('SSP585 (2015–2100): %.2f Sv decade^{-1}', trend585_fut), ...
+     'Color',[0.8 0 0], ...
+     'FontSize',10, ...
+     'FontName','Helvetica');
+
+% SSP126 future trend (blue)
+text(x_text, y_text_126, ...
+     sprintf('SSP126 (2015–2100): %.2f Sv decade^{-1}', trend126_fut), ...
+     'Color',[0 0.25 0.8], ...
+     'FontSize',10, ...
+     'FontName','Helvetica');
+
+% ================= CORRELATION ANNOTATION =================
+
+text(1860, -11.5, ...
+     sprintf('Historical r = %.2f (p = %.3f)', r_hist, p_hist), ...
+     'Color','k', ...
+     'FontSize',10, ...
+     'FontName','Helvetica');
+title('AMOC evolution (26.5°N), 1850–2100', ...
+      'FontWeight','normal')
+
+fprintf('\n=====================================\n')
+fprintf('        AMOC Trends (Sv/decade)\n')
+fprintf('=====================================\n')
+fprintf('SSP585  Hist: %.3f | Fut: %.3f\n', trend585_hist, trend585_fut)
+fprintf('SSP126  Hist: %.3f | Fut: %.3f\n', trend126_hist, trend126_fut)
+fprintf('=====================================\n\n')
+function [ens_mean, ens_std, trend_hist, trend_fut] = ...
+    function_process(ncfile, models_target, model_constraint, ...
+                     years_full, hist_ref_idx, win)
+
+AMOC_raw = ncread(ncfile,'AMOC_CMIP6');
+AMOC = squeeze(permute(AMOC_raw,[5 3 1 2 4]));
+AMOC(~isfinite(AMOC)) = NaN;
+AMOC(abs(AMOC)>1e4) = NaN;
+
+model_names = strtrim(cellstr(ncread(ncfile,'model')'));
+valid_idx = ismember(model_names, models_target);
+selected_models = model_names(valid_idx);
+
+AMOC_sel = AMOC(valid_idx,:,:);
+AMOC_mean = squeeze(mean(AMOC_sel,2,'omitnan'));
+
+% Baseline anomaly
+AMOC_anom = AMOC_mean - ...
+    mean(AMOC_mean(:,hist_ref_idx),2,'omitnan');
+
+AMOC_smooth = movmean(AMOC_anom,win,2,'omitnan');
+
+idx_constr = ismember(selected_models, model_constraint);
+AMOC_constr = AMOC_smooth(idx_constr,:);
+
+ens_mean = mean(AMOC_constr,1,'omitnan');
+ens_std  = std(AMOC_constr,0,1,'omitnan');
+
+fut_idx = years_full > 2014;
+
+p = polyfit(years_full(hist_ref_idx),ens_mean(hist_ref_idx),1);
+trend_hist = p(1)*10;
+
+p = polyfit(years_full(fut_idx),ens_mean(fut_idx),1);
+trend_fut = p(1)*10;
+end
