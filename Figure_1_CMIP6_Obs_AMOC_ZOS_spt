@@ -1,0 +1,211 @@
+%% ============================================================
+% Combined 24-panel: AMOC–ZOS Spatial Correlations
+% Panels 1–3: 1993–2014 (Obs + Constrained + Other)
+% Panels 4–24: 1850–2014 (Ensemble + 20 models)
+%% ============================================================
+
+clear; clc;
+
+%% === LOAD DATA =============================================
+load('AMOC_ZOS_CMIP6_Results.mat')      % CMIP6 results
+load('obs_spatial_plot_params.mat')     % Observations
+load('na.dat');                         % Coastline file
+
+% Coastline for short-period panels (matches -180 to 180 grid)
+load coastlines
+%% --- Define periods
+R_short = Results(2);  % 1993–2014
+R_long  = Results(1);  % 1850–2014
+
+%% --- Grid for short period
+lon = R_short.lon; lat = R_short.lat;
+lonplot = lon; lonplot(lonplot > 180) = lonplot(lonplot > 180) - 360;
+[LonGrid, LatGrid] = meshgrid(lonplot, lat);
+
+%% --- Coastal boxes (from obs plot params)
+x1 = obs_plot_params.coast_boxes.south(1); x2 = obs_plot_params.coast_boxes.south(2);
+y1 = obs_plot_params.coast_boxes.south(3); y2 = obs_plot_params.coast_boxes.south(4);
+x3 = obs_plot_params.coast_boxes.north(1); x4 = obs_plot_params.coast_boxes.north(2);
+y3 = obs_plot_params.coast_boxes.north(3); y4 = obs_plot_params.coast_boxes.north(4);
+
+%% --- Coastline setup (for all panels)
+coast.lon = na(:,1); coast.lat = na(:,2);
+coast.lon(coast.lon < 0) = coast.lon(coast.lon < 0) + 360;
+jump_idx = find(abs(diff(coast.lon)) > 20);
+for kx = numel(jump_idx):-1:1
+    coast.lon = [coast.lon(1:jump_idx(kx)); NaN; coast.lon(jump_idx(kx)+1:end)];
+    coast.lat = [coast.lat(1:jump_idx(kx)); NaN; coast.lat(jump_idx(kx)+1:end)];
+end
+
+%% --- Model groups 1993–2014
+constraint_models = { ...
+    'CanESM5','CESM2-WACCM','CNRM-CM6-1-HR','FIO-ESM-2-0','HadGEM3-GC31-LL',...
+    'BCC-CSM2-MR','CAMS-CSM1-0','CESM2','CNRM-CM6-1','HadGEM3-GC31-MM', ...
+    'MPI-ESM1-2-HR','SAM0-UNICON','MRI-ESM2-0','NESM3','NorESM2-LM','UKESM1-0-LL'}; 
+
+other_models = {'E3SM-1-1','INM-CM4-8','INM-CM5-0','IPSL-CM6A-LR'};
+
+all_models_short = R_short.model_names;
+nmod_short = numel(all_models_short);
+
+%% --- Observations 1993–2014
+obs_lon = obs_plot_params.lon; obs_lat = obs_plot_params.lat;
+obs_lon_plot = obs_lon; obs_lon_plot(obs_lon_plot > 180) = obs_lon_plot(obs_lon_plot > 180) - 360;
+[ObsLonGrid, ObsLatGrid] = meshgrid(obs_lon_plot, obs_lat);
+
+r_obs = interp2(ObsLonGrid, ObsLatGrid, obs_plot_params.rmap_coast', LonGrid, LatGrid, 'linear');
+p_obs = interp2(ObsLonGrid, ObsLatGrid, obs_plot_params.pmap_coast', LonGrid, LatGrid, 'linear');
+s_obs = p_obs < 0.05;
+
+%% --- Extract CMIP6 per-model maps 1993–2014
+rmaps_short = nan(length(lat), length(lon), nmod_short);
+pmaps_short = nan(length(lat), length(lon), nmod_short);
+for m = 1:nmod_short
+    rmaps_short(:,:,m) = R_short.corr_maps{m}';
+    pmaps_short(:,:,m) = R_short.p_maps{m}';
+end
+
+%% --- Ensemble means & significance
+ensMean = @(X,idx) mean(X(:,:,idx),3,'omitnan');
+ensSig  = @(P,idx) mean(P(:,:,idx)<0.05,3,'omitnan') >= 0.5;
+
+idx_con = find(ismember(all_models_short, constraint_models));
+idx_oth = find(ismember(all_models_short, other_models));
+
+r_con = ensMean(rmaps_short, idx_con);
+s_con = ensSig(pmaps_short, idx_con);
+
+r_oth = ensMean(rmaps_short, idx_oth);
+s_oth = ensSig(pmaps_short, idx_oth);
+
+%% --- Ensemble + individual models 1850–2014
+R = R_long;
+[xx,yy] = meshgrid(R.lon,R.lat);
+stip_step = 3; N = numel(R.Data);
+
+rstack = cat(3,R.rmax_maps{:});
+ensemble_rmax = mean(rstack,3,'omitnan');
+sig_stack = cat(3,R.rmax_sig{:});
+frac_sig = mean(sig_stack,3,'omitnan');
+ens_sig = (frac_sig >= 0.5) & R.ensemble_sig;
+
+%% --- PLOTTING 24 PANELS ===================================
+figure('Color','w','Position',[100 100 1700 950]);
+ncol = 6; nrow = 4;
+tiledlayout(nrow,ncol,'TileSpacing','compact','Padding','compact');
+
+letters = ['a':'x'];  % panel labels for all 24 panels
+
+%% --- Panels 1–3: Obs, Constrained, Other (1993–2014)
+rmaps_plot = {r_obs, r_con, r_oth};
+sig_plot   = {s_obs, s_con, s_oth};
+titles     = {'Observations','Constraint models','Other models'};
+
+for k = 1:3
+    nexttile; hold on; box on;
+
+    % --- Make continents black (background land mask) ---
+    patch([-180 -180 180 180],[-90 90 90 -90],'k','EdgeColor','none')
+
+    % --- Plot ocean correlation map ---
+    h = pcolor(lonplot, lat, rmaps_plot{k});
+    set(h,'EdgeColor','none')
+    shading flat
+    axis xy
+
+    colormap(cmocean('balance'))
+    caxis([-1 1])
+
+    % --- Coastlines ---
+    plot(coastlon, coastlat,'k','LineWidth',1.1)
+    % Stippling
+    plot(LonGrid(sig_plot{k}), LatGrid(sig_plot{k}),'k.','MarkerSize',2)
+
+    % Coastal boxes only for panel 1
+    if k == 1
+        plot([x1 x2 x2 x1 x1]-360,[y1 y1 y2 y2 y1],'k','LineWidth',1.5)
+        plot([x3 x4 x4 x3 x3]-360,[y3 y3 y4 y4 y3],'k','LineWidth',1.5)
+    end
+
+    % Axis formatting
+    xlim([-90 0]); ylim([0 60])
+    % Panel letter (aligned top-left relative to axes)
+    xlim_curr = xlim; ylim_curr = ylim;
+    text(xlim_curr(1)+2, ylim_curr(2)-2, ['(' letters(k) ')'], 'FontWeight','bold','FontSize',14)
+
+    % Title
+    title(titles{k},'FontWeight','bold','FontSize',12)
+
+    if k == 1
+        set(gca,'XTick',[],'YTick',0:10:60,...
+            'YTickLabel',{'0°','10°N','20°N','30°N','40°N','50°N','60°N'},...
+            'FontSize',11,'LineWidth',1)
+    else
+        set(gca,'XTick',[],'YTick',[],'FontSize',11,'LineWidth',1)
+    end
+end
+
+%% --- Panel 4: Ensemble mean 1850–2014
+nexttile; hold on; box on;
+imagesc(R.lon,R.lat,ensemble_rmax');
+set(gca,'YDir','normal'); axis tight
+xlim([min(R.lon) max(R.lon)]); ylim([min(R.lat) max(R.lat)])
+caxis([-1 1])
+
+% Stippling
+mask = false(size(ens_sig)); mask(1:stip_step:end,1:stip_step:end) = true;
+stip = ens_sig & mask;
+scatter(xx(stip)',yy(stip)',10,'k','filled','MarkerFaceAlpha',0.5)
+
+% Coastline
+plot(coast.lon, coast.lat,'k','LineWidth',1.1)
+
+% Panel letter
+xlim_curr = xlim; ylim_curr = ylim;
+text(xlim_curr(1)+2, ylim_curr(2)-2, ['(' letters(4) ')'], 'FontWeight','bold','FontSize',14)
+
+% Title and axis formatting
+title('Ensemble mean','FontWeight','bold')
+yticks([]); xticks([]); set(gca,'FontSize',11,'LineWidth',1)
+colormap(cmocean('balance'))
+
+
+for m = 1:N
+    nexttile; hold on; box on;
+    imagesc(R.lon,R.lat,R.rmax_maps{m}');
+    set(gca,'YDir','normal'); axis tight
+    xlim([min(R.lon) max(R.lon)]); ylim([min(R.lat) max(R.lat)]); caxis([-1 1])
+
+    % Stippling
+    sig = R.rmax_sig{m};
+    mask = false(size(sig)); mask(1:stip_step:end,1:stip_step:end) = true;
+    stip = sig & mask;
+    scatter(xx(stip)',yy(stip)',10,'k','filled','MarkerFaceAlpha',0.4)
+
+    % Coastline
+    plot(coast.lon, coast.lat,'k','LineWidth',1.1)
+
+    % Y-axis removed for all these panels
+    yticks([])
+
+    % X-axis only for panels 19–24
+    panel_index = 4 + m;  % overall panel index
+    if panel_index >= 19
+        xticks(270:20:360);
+        xticklabels({'90°W','70°W','50°W','30°W','10°W'});
+    else
+        xticks([]);
+    end
+
+    % Panel letter
+    xlim_curr = xlim; ylim_curr = ylim;
+    text(xlim_curr(1)+2, ylim_curr(2)-2, ['(' letters(panel_index) ')'], 'FontWeight','bold','FontSize',14)
+
+    % Title and axes formatting
+    title(R.Data(m).model_name,'FontSize',12)
+    set(gca,'FontSize',11,'LineWidth',1)
+end
+
+%% --- Colorbar
+cb = colorbar('Position',[0.88 0.18 0.015 0.64]);
+cb.Label.String = 'Correlation (r)'; cb.Label.FontSize = 11; cb.Ticks = -1:0.2:1;
