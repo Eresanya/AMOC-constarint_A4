@@ -1,0 +1,1285 @@
+%% CMIP6 AMOC–ZOS Analysis Pipeline
+% Purpose:
+%   Quantify the co-variability and lagged relationship between
+%   Atlantic Meridional Overturning Circulation (AMOC) strength
+%   and North American coastal sea level (ZOS) in CMIP6
+%   historical simulations.
+%
+% Coastal ZOS index:
+%   Defined as the difference between low-latitude (SE US)
+%   and high-latitude (NE US / Canada) coastal sea level,
+%   isolating along-coast sea-level gradients associated
+%   with AMOC variability.
+%
+% Outputs:
+%   Figure 1: ts of AMOC vs coastal ZOS index for each model
+%   Figure 2: ts of AMOC vs coastal ZOS index in one panel
+%   Figure 3: Scatter plots (AMOC vs coastal ZOS index)
+%   Figure 4: Spatial correlation maps (AMOC vs local ZOS)
+%   Figure 5: Lag–correlation diagnostics (scalar + maps)
+%
+% Notes:
+%   -Lag convention:
+%   -Positive lag = AMOC leads ZOS
+%   -This reflects the physical expectation that circulation
+%   -changes precede coastal sea-level adjustment.
+%
+%   % Analysis periods:
+%   (1) Full historical: captures forced + internal variability
+%   (2) Satellite era: facilitates comparison with altimetry-based studies
+
+%% ============================================================
+clear; clc;
+
+%% ================== CONFIGURATION ===========================
+% NetCDF file containing AMOC anomalies for all CMIP6 models
+AMOC_file = 'AMOC_anom_smooth_hist_r1i1p1f1.nc';
+
+% Variable name inside the NetCDF file
+AMOC_var  = 'AMOC_anom_smooth_hist_r1i1p1f1';
+
+smooth_win = 5;   % years
+
+%% ================= Coastline (uniform, reusable) =================%% ================= Coastline (uniform, reusable) =================
+% Load North American coastline used consistently across all figures
+% Format: [longitude latitude]
+load('na.dat');
+
+coast.lon = na(:,1);
+coast.lat = na(:,2);
+
+% Convert longitude convention from [-180,180] to [0,360]
+coast.lon(coast.lon < 0) = coast.lon(coast.lon < 0) + 360;
+
+% Insert NaNs at large longitude jumps to avoid wraparound lines
+
+jump_idx = find(abs(diff(coast.lon)) > 20);
+for k = numel(jump_idx):-1:1
+    coast.lon = [coast.lon(1:jump_idx(k)); NaN; coast.lon(jump_idx(k)+1:end)];
+    coast.lat = [coast.lat(1:jump_idx(k)); NaN; coast.lat(jump_idx(k)+1:end)];
+end
+
+% List of CMIP6 ZOS NetCDF files (one per model)
+% All files are pre-regridded to 1° × 1° for consistency
+% CMIP6 ZOS files
+
+model_filenames_zos = { ...
+    'zos_Omon_BCC-CSM2-MR_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_CAMS-CSM1-0_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_CanESM5_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_CESM2_historical_r1i1p1f1_gr_1850-2014_r360x180.nc', ...
+    'zos_Omon_CESM2-WACCM_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_CNRM-CM6-1_historical_r1i1p1f2_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_CNRM-CM6-1-HR_historical_r1i1p1f2_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_E3SM-1-1_historical_r1i1p1f1_gr_1850-2014_r360x180.nc', ...
+    'zos_Omon_FIO-ESM-2-0_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_HadGEM3-GC31-LL_historical_r1i1p1f3_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_HadGEM3-GC31-MM_historical_r1i1p1f3_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_INM-CM4-8_historical_r1i1p1f1_gr1_1850-2014_r360x180.nc', ...
+    'zos_Omon_INM-CM5-0_historical_r1i1p1f1_gr1_1850-2014_r360x180.nc', ...
+    'zos_Omon_IPSL-CM6A-LR_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_MPI-ESM1-2-HR_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_MRI-ESM2-0_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_NESM3_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_NorESM2-LM_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_SAM0-UNICON_historical_r1i1p1f1_gn_1850-2014_r360x180.nc', ...
+    'zos_Omon_UKESM1-0-LL_historical_r1i1p1f2_gn_1850-2014_r360x180.nc'};
+
+model_names = { ...
+    'BCC-CSM2-MR','CAMS-CSM1-0','CanESM5','CESM2','CESM2-WACCM','CNRM-CM6-1', ...
+    'CNRM-CM6-1-HR','E3SM-1-1','FIO-ESM-2-0','HadGEM3-GC31-LL', ...
+    'HadGEM3-GC31-MM','INM-CM4-8','INM-CM5-0','IPSL-CM6A-LR', ...
+    'MPI-ESM1-2-HR','MRI-ESM2-0','NESM3','NorESM2-LM', ...
+    'SAM0-UNICON','UKESM1-0-LL'};
+
+% Analysis periods:
+% 1) Full historical (1850–2014)
+% 2) Satellite altimetry era (1993–2013)
+periods = [1850 2014; 1993 2013];
+
+% Definition of coastal boxes used to construct the coastal ZOS index
+% Low-latitude box (U.S. southeast)
+% Coastal ZOS index:
+% Difference between low-latitude and high-latitude
+% coastal sea level (emphasizing along-coast gradientsrather than
+% basin-mean changes)
+
+% % Southern Box
+% x1 = 285; x2 = 305;
+% % y1 = 25; y2 = 35;
+% y1 = 29; y2 = 39;
+% % Northern Box
+% x3 = 302; x4 = 322;
+% y3 = 43; y4 = 53;
+
+
+% low-latitude box 
+boxes.low.lon  = [285 305];
+% boxes.low.lat  = [25 35];
+boxes.low.lat  = [29 39];
+
+
+% High-latitude box (U.S. northeast / Canada)
+boxes.high.lon = [302 322];
+% boxes.high.lat = [40 50];
+boxes.high.lat = [43 53];
+
+% Map domain for spatial correlations
+boxes.map.lon  = [270 360];
+boxes.map.lat  = [0 60];
+
+% Lag vector (in years)
+% Positive lag = AMOC leads ZOS
+% Negative lag = ZOS leads AMOC
+lags = -10:10;
+
+% Indices corresponding to physically meaningful lags
+% (AMOC → sea level)
+% posLagIdx = find(lags > 0);
+posLagIdx = find(lags >= 0); 
+
+%% ================= LOAD AMOC ===============================
+% Read model names stored in AMOC NetCDF file
+models_raw = ncread(AMOC_file,'model');
+models_in_amoc = strtrim(cellstr(models_raw'));
+
+% AMOC anomalies [model × time]
+AMOC_all = ncread(AMOC_file, AMOC_var);
+
+%% ================= PROCESS EACH PERIOD =====================
+% Preallocate results structure for each analysis period
+num_periods = size(periods,1);
+
+Results(num_periods) = struct( ...
+    'corr_AMOC_CI', [], 'p_AMOC_CI', [], ... %% Scalar AMOC–coastal index correlation (zero lag)
+    'best_r_CI', [], 'best_p_CI', [], ...%% Scalar AMOC–coastal index correlation (lag)
+    'corr_maps', [], 'p_maps', [], ... % Spatial correlation maps
+    'lon', [], 'lat', [], ...
+    'ensemble_corr', [], 'ensemble_sig', [], ...% Ensemble-mean spatial correlation
+    'lag_corr_CI', [], 'best_lag_CI', [], ... % Lagged scalar correlations
+    'lag_corr_maps', [], 'rmax_maps', [], 'rmax_sig', [], 'best_lag_maps', [], ... % Lagged spatial correlations
+    'ensemble_r0', [], 'ensemble_p0', [], ...
+    'ensemble_rbest', [], 'ensemble_pbest', [], 'ensemble_best_lag', [],...
+    'Data', [],  'model_names', [],'period', []);
+
+
+for p = 1:num_periods
+    Results(p) = process_period(periods(p,:), AMOC_all, models_in_amoc, ...
+        model_filenames_zos, model_names, boxes, lags, smooth_win);
+end
+
+%% ================= FUNCTIONS ===============================
+
+function R = process_period(period, AMOC_all, models_in_amoc, ...
+                            zos_files, model_names, boxes, lags, smooth_win)
+% For a given period:
+%   1) Load AMOC and ZOS for all models
+%   2) Compute scalar and spatial correlations
+%   3) Perform lagged correlation analysis
+%   4) Compute ensemble statistics
+
+num_models = numel(model_names);
+
+Data(num_models) = struct('AMOC', [], 'coastal_index', [], 'zos_map', [], ...
+    'lon', [], 'lat', [], 'model_name', '');
+
+for m = 1:num_models
+    Data(m) = load_model_data(model_names{m}, zos_files{m}, ...
+                          AMOC_all, models_in_amoc, period, boxes, smooth_win);
+
+end
+
+% ---- Scalar AMOC–Coastal Index correlation
+% Correlation between basin-scale AMOC and regional coastal sea-level index
+[R.corr_AMOC_CI, R.p_AMOC_CI] = compute_scalar_corr(Data);
+
+% ---- Spatial correlation (BOX-RESTRICTED)
+% Correlation between AMOC and local ZOS at each grid point
+[R.corr_maps, R.p_maps, R.lon, R.lat] = ...
+    compute_spatial_corr_box(Data, boxes);
+
+% ---- Ensemble mean & significance
+[R.ensemble_corr, R.ensemble_sig] = ensemble_fisher_z(R.corr_maps);
+
+% ---- Lagged correlations (BOX-RESTRICTED)
+% Lag sweep to identify where and when AMOC leads sea-level changes
+
+[R.lag_corr_CI, R.best_lag_CI, R.best_r_CI, R.best_p_CI, ...
+ R.lag_corr_maps, R.rmax_maps, R.rmax_sig, R.best_lag_maps] = ...
+    compute_lag_corr_box(Data, lags, boxes);
+
+R.Data   = Data;
+R.model_names = {Data.model_name}; 
+R.period = period;
+
+% === Ensemble zero-lag scalar correlation ===
+% Align all models to common length
+minLength = min(arrayfun(@(x) numel(x.AMOC), Data));
+amoc_all = arrayfun(@(x) x.AMOC(1:minLength), Data, 'uni',0);
+zos_all  = arrayfun(@(x) x.coastal_index(1:minLength), Data, 'uni',0);
+
+amoc_mat = cell2mat(amoc_all');
+zos_mat  = cell2mat(zos_all');
+
+% Normalize per model
+for m = 1:numel(Data)
+    amoc_mat(m,:) = (amoc_mat(m,:) - mean(amoc_mat(m,:),'omitnan')) / std(amoc_mat(m,:),'omitnan');
+    zos_mat(m,:)  = (zos_mat(m,:)  - mean(zos_mat(m,:),'omitnan')) / std(zos_mat(m,:),'omitnan');
+end
+
+% Ensemble mean
+amoc_ens = mean(amoc_mat,1,'omitnan');
+zos_ens  = mean(zos_mat,1,'omitnan');
+
+% Zero-lag correlation
+[R.ensemble_r0, R.ensemble_p0] = corr_ac(amoc_ens', zos_ens');
+
+% === Ensemble best-lag correlation ===
+posLagIdx = find(lags >= 0);
+lagcorr_ens = mean(R.lag_corr_CI(:,posLagIdx),1,'omitnan');
+
+% [R.ensemble_rbest, idx] = max(lagcorr_ens);
+% R.ensemble_best_lag = lags(posLagIdx(idx));
+
+% --- Identify ensemble best lag from mean lag-correlation curve
+[~, idx] = max(lagcorr_ens);
+R.ensemble_best_lag = lags(posLagIdx(idx));
+
+% --- Recompute ensemble r at the selected best lag
+best_lag = R.ensemble_best_lag;
+
+if best_lag > 0
+    A = amoc_ens(1:end-best_lag);
+    Z = zos_ens(1+best_lag:end);
+else
+    A = amoc_ens;
+    Z = zos_ens;
+end
+
+[R.ensemble_rbest, R.ensemble_pbest] = corr_ac(A', Z');
+
+%temporary
+fprintf('ENSEMBLE CHECK | lag=%d | r(best)=%.2f | r0=%.2f\n', ...
+    R.ensemble_best_lag, R.ensemble_rbest, R.ensemble_r0);
+
+
+% Optional p-value at best lag
+if R.ensemble_best_lag > 0
+    Aplot = amoc_ens(1:end-R.ensemble_best_lag);
+    Zplot = zos_ens(1+R.ensemble_best_lag:end);
+else
+    Aplot = amoc_ens;
+    Zplot = zos_ens;
+end
+[~, R.ensemble_pbest] = corr_ac(Aplot', Zplot');
+
+
+end
+
+%% ================= SAVE FULL RESULTS STRUCT (self-contained) =====================
+savefile = fullfile(pwd, 'AMOC_ZOS_CMIP6_Results.mat');
+
+% Add model names at top level for each period
+for p = 1:num_periods
+    Results(p).model_names = {Results(p).Data.model_name};  % Ensure model names exist
+end
+
+save(savefile, 'Results', '-v7.3');
+fprintf('Full Results struct saved to: %s\n', savefile);
+
+%% ================= SAVE SUMMARY RESULTS PER PERIOD =====================
+for p = 1:num_periods
+    S = struct();
+
+    % ---- Metadata
+    S.period      = Results(p).period;
+    S.model_names = Results(p).model_names;   % list of models for this period
+
+    % ---- Model-wise scalar correlations
+    S.corr_AMOC_CI = Results(p).corr_AMOC_CI;   % zero-lag r
+    S.best_r_CI    = Results(p).best_r_CI;      % best-lag r
+
+    % ---- Ensemble statistics
+    S.ensemble_r0    = Results(p).ensemble_r0;      % zero-lag ensemble
+    S.ensemble_rbest = Results(p).ensemble_rbest;   % best-lag ensemble
+    S.ensemble_best_lag = Results(p).ensemble_best_lag; % best lag
+
+    % ---- Filename includes period
+    fname = sprintf('AMOC_ZOS_scalar_corr_%d_%d.mat', ...
+                    Results(p).period(1), Results(p).period(2));
+
+    save(fname, '-struct', 'S');
+    fprintf('Saved: %s\n', fname);
+end
+
+%% ================= DISPLAY MODEL CORRELATIONS =====================
+for p = 1:num_periods
+    fprintf('\nPeriod: %d–%d\n', Results(p).period(1), Results(p).period(2));
+    disp(table(Results(p).model_names', Results(p).corr_AMOC_CI, Results(p).best_r_CI, ...
+        'VariableNames', {'Model', 'r0', 'r_best'}))
+end
+
+
+%% -------------------- Load Model Data ----------------------
+% Assumption: ZOS monthly data start in Jan 1850 with no gaps;
+% annual means are aligned to AMOC annual means.
+
+function D = load_model_data(model, zos_file, AMOC_all, models_in_amoc, period, boxes, smooth_win)
+idx = find(strcmp(models_in_amoc, model));
+AMOC_full = squeeze(AMOC_all(idx,:));
+years = 1850:(1850+numel(AMOC_full)-1);
+D.AMOC = AMOC_full(years>=period(1) & years<=period(2));
+
+zos = ncread(zos_file,'zos');
+lon = ncread(zos_file,'lon'); lat = ncread(zos_file,'lat'); time = ncread(zos_file,'time');
+fillval = ncreadatt(zos_file,'zos','_FillValue'); zos(zos==fillval)=NaN;
+lon(lon<0) = lon(lon<0)+360;
+
+% Remove global mean
+% Latitude-only weighting approximates area weighting on regular lon grid
+w = cosd(lat(:)); W = reshape(w,1,[],1);
+num = nansum(nansum(zos.*W,2),1);
+den = nansum(nansum(~isnan(zos).*W,2),1);
+zos = zos - reshape(num./den,1,1,[]);
+
+% ---------------- Detrend ZOS at each grid point ----------------
+% Removes linear trend at each (lon,lat) independently
+
+% zos: [lon × lat × time]
+[nlon,nlat,ntime] = size(zos);
+
+Z = reshape(zos, [], ntime)';   % [time × space]
+valid = sum(~isnan(Z),1) >= 10;
+
+t = (1:ntime)';
+t = t - mean(t);
+
+%ZOS is linearly detrended to isolate dynamic sea-level variability
+Z(:,valid) = detrend(Z(:,valid), 'linear');
+zos = reshape(Z', nlon, nlat, ntime);
+
+years_zos = 1850:(1850+floor(numel(time)/12)-1);
+D.coastal_index = compute_coastal_index(zos, lon, lat, years_zos, period, boxes);
+D.zos_map = annualize_map(zos, years_zos, period, boxes);
+
+% ---- Temporal smoothing (low-pass)
+D.AMOC = movmean(D.AMOC, smooth_win, 'omitnan', 'Endpoints','shrink');
+D.coastal_index = movmean(D.coastal_index, smooth_win, ...
+                          'omitnan', 'Endpoints','shrink');
+
+% ---- Re-center CI after smoothing
+D.coastal_index = D.coastal_index - mean(D.coastal_index,'omitnan');
+
+D.lon = lon; D.lat = lat; D.model_name = model;
+end
+
+%% -------------------- Coastal Index -----------------------
+function CI = compute_coastal_index(zos, lon, lat, years, period, boxes)
+idxL = lon>=boxes.low.lon(1) & lon<=boxes.low.lon(2);
+idxH = lon>=boxes.high.lon(1) & lon<=boxes.high.lon(2);
+idyL = lat>=boxes.low.lat(1) & lat<=boxes.low.lat(2);
+idyH = lat>=boxes.high.lat(1) & lat<=boxes.high.lat(2);
+
+low  = squeeze(mean(zos(idxL,idyL,:),[1 2],'omitnan'));
+high = squeeze(mean(zos(idxH,idyH,:),[1 2],'omitnan'));
+d = low - high;
+
+nyears = floor(numel(d)/12); d = d(1:12*nyears);
+CI = mean(reshape(d,12,nyears),1,'omitnan');
+CI = CI(years>=period(1) & years<=period(2));
+CI = CI - mean(CI,'omitnan');
+
+end
+
+%% -------------------- Annualize Map ----------------------
+function Zmap = annualize_map(zos, years, period, boxes)
+nyears = floor(size(zos,3)/12);
+zos = zos(:,:,1:12*nyears);
+Zmap = mean(reshape(zos,size(zos,1),size(zos,2),12,nyears),3,'omitnan');
+Zmap = Zmap(:,:,years>=period(1) & years<=period(2));
+end
+
+%% -------------------- Scalar Correlation -----------------
+function [r,p] = compute_scalar_corr(Data)
+N = numel(Data); 
+r = nan(N,1); 
+p = nan(N,1);
+
+for i = 1:N
+    x = Data(i).AMOC(:); 
+    y = Data(i).coastal_index(:);
+    if numel(x) >= 5 && numel(y) >= 5
+        [r(i), p(i)] = corr_ac(x, y);
+    end
+end
+end
+
+%% -------------------- Spatial Correlation ----------------
+% Correlations are computed independently at each grid point,
+% with significance accounting for serial autocorrelation
+% in both AMOC and ZOS time series.
+
+function [corr_maps, p_maps, lon_sel, lat_sel] = compute_spatial_corr_box(Data, boxes)
+lon = Data(1).lon; lat = Data(1).lat;
+idx_lon = lon >= boxes.map.lon(1) & lon <= boxes.map.lon(2);
+idx_lat = lat >= boxes.map.lat(1) & lat <= boxes.map.lat(2);
+lon_sel = lon(idx_lon); lat_sel = lat(idx_lat);
+
+nlon = sum(idx_lon); nlat = sum(idx_lat);
+num_models = numel(Data);
+
+corr_maps = cell(num_models,1);
+p_maps = cell(num_models,1);
+
+for m = 1:num_models
+    Z = Data(m).zos_map(idx_lon, idx_lat, :); % [lon x lat x time]
+    A = Data(m).AMOC(:);                      % AMOC time series
+    Zmat = reshape(Z,[],numel(A))';           % [time x space]
+
+    % Compute correlation per grid point
+    r = nan(size(Zmat,2),1);
+    p = nan(size(Zmat,2),1);
+
+    for s = 1:size(Zmat,2)
+    if sum(~isnan(Zmat(:,s))) >= 5
+        [r(s), p(s)] = corr_ac(A, Zmat(:,s));
+    end
+end
+
+    corr_maps{m} = reshape(r, nlon, nlat);
+    p_maps{m} = reshape(p, nlon, nlat);
+end
+end
+
+
+%% -------------------- Ensemble Fisher Z -----------------
+% Fisher z-transform ensures unbiased averaging
+% of correlation coefficients across models.
+function [Rmean,Rsig] = ensemble_fisher_z(corr_maps)
+[nlon,nlat] = size(corr_maps{1}); Rmean=nan(nlon,nlat); Rsig=false(nlon,nlat);
+for i=1:nlon
+    for j=1:nlat
+        r = cellfun(@(x)x(i,j),corr_maps); r=r(~isnan(r));
+        if numel(r)>=4
+            z = atanh(max(min(r,0.999999),-0.999999));
+            zbar = mean(z); se = 1/sqrt(numel(r)-3);
+            p = 2*(1-normcdf(abs(zbar/se)));
+            Rmean(i,j) = mean(r); Rsig(i,j) = p<=0.05;
+        end
+    end
+end
+end
+
+%% -------------------- Lagged Correlations -----------------
+% Lag analysis is restricted to positive lags to enforce
+% physical causality (AMOC → sea level),
+% avoiding interpretation of unphysical reverse causation.
+
+function [lag_corr_CI, best_lag_CI, best_r_CI, best_p_CI, ...
+          lag_maps, rmax_maps, rmax_sig, best_lag_maps] = ...
+    compute_lag_corr_box(Data, lags, boxes)
+
+
+% Computes lagged correlations between AMOC and:
+%   1) Scalar coastal ZOS index
+%   2) Local ZOS at each grid point
+%
+% For each model:
+%   - Correlations are computed for all lags
+%   - Only positive lags (AMOC leads) are used to define "best lag"
+%   - Significance is evaluated at each grid point and lag
+
+N = numel(Data);
+nLags = numel(lags);
+posLagIdx = find(lags >= 0); 
+best_r_CI = nan(N,1);
+best_p_CI = nan(N,1);
+
+idx_lon = Data(1).lon >= boxes.map.lon(1) & Data(1).lon <= boxes.map.lon(2);
+idx_lat = Data(1).lat >= boxes.map.lat(1) & Data(1).lat <= boxes.map.lat(2);
+nlon = sum(idx_lon);
+nlat = sum(idx_lat);
+
+lag_corr_CI   = nan(N,nLags);
+best_lag_CI  = nan(N,1);
+
+lag_maps     = cell(N,1);
+rmax_maps    = cell(N,1);
+rmax_sig     = cell(N,1);
+best_lag_maps = cell(N,1);
+
+for m = 1:N
+
+    A  = Data(m).AMOC(:);
+    CI = Data(m).coastal_index(:);
+    Z  = Data(m).zos_map(idx_lon, idx_lat, :);
+    Zmat = reshape(Z,[],numel(A))';   % [time x space]
+
+    %% ---- Scalar CI lag correlation
+    % Shift time series according to lag definition
+% Positive lag: AMOC at time t compared to ZOS at t+lag
+plag_CI = nan(1, nLags);
+
+for k = 1:nLags
+    L = lags(k);
+
+    if L > 0
+        am = A(1:end-L);
+        zs = CI(L+1:end);
+    elseif L == 0
+        am = A;
+        zs = CI;
+    else
+        continue    % still exclude negative lags if you want AMOC → ZOS
+    end
+
+    if numel(am) >= 5
+        [lag_corr_CI(m,k), plag_CI(k)] = corr_ac(am, zs);
+    end
+end
+
+    % [~, idx] = max(lag_corr_CI(m,posLagIdx));
+    % best_lag_CI(m) = lags(posLagIdx(idx));
+    
+    [rmax, idx] = max(lag_corr_CI(m,posLagIdx));
+    best_lag_CI(m) = lags(posLagIdx(idx));
+    best_r_CI(m)   = rmax;
+    best_p_CI(m)   = plag_CI(posLagIdx(idx));
+
+    % ---- Zero-lag correlation sanity check (full-length)
+    [r0, ~] = corr_ac(A, CI);
+
+    % ---- Diagnostic printout (debugging only)
+    fprintf('%s | r0 = %.2f | best r = %.2f at lag %d\n', ...
+    Data(m).model_name, r0, best_r_CI(m), best_lag_CI(m));
+
+    %% ---- Spatial lag correlations (WITH p-values)
+    % Vectorized correlation across all spatial points
+% Only grid points with sufficient valid data are retained
+
+    rlag = nan(nlon*nlat, nLags);
+    plag = nan(nlon*nlat, nLags);
+
+    for k = 1:nLags
+        L = lags(k);
+        if L > 0
+            am = A(1:end-L);
+            zs = Zmat(L+1:end,:);
+        else
+            am = A;
+            zs = Zmat;
+        end
+        valid = sum(~isnan(zs)) >= 5;
+        if any(valid)
+            % [rlag(valid,k), plag(valid,k)] = ...
+            %     corr(am, zs(:,valid), 'rows','pairwise');
+            for s = find(valid)
+    [rlag(s,k), plag(s,k)] = corr_ac(am, zs(:,s));
+end
+
+        end
+    end
+
+    rlag_3D = reshape(rlag, nlon, nlat, nLags);
+    plag_3D = reshape(plag, nlon, nlat, nLags);
+    lag_maps{m} = rlag_3D;
+
+    %% ---- Best positive lag + significance
+    rpos = rlag_3D(:,:,posLagIdx);
+    ppos = plag_3D(:,:,posLagIdx);
+
+    % Identify maximum correlation over positive lags only
+    % This avoids unphysical interpretation of ZOS leading AMOC
+
+    [rmax_val, lag_idx] = max(rpos,[],3);
+    rmax_maps{m} = rmax_val;
+
+    sig = false(nlon,nlat);
+    for i = 1:nlon
+        for j = 1:nlat
+            if ~isnan(lag_idx(i,j))
+                sig(i,j) = ppos(i,j,lag_idx(i,j)) <= 0.05;
+            end
+        end
+    end
+    rmax_sig{m} = sig;
+
+    blmap = nan(nlon,nlat);
+    blmap(:) = lags(posLagIdx(lag_idx(:)));
+    best_lag_maps{m} = blmap;
+
+end
+end
+
+%% ================= PLOTTING (Nature style) =================
+% Generates all main figures used in the manuscript
+% 1): Time series overlay (AMOC & coastal ZOS)
+plot_ts_AMOC_ZOS_panels(Results(1));
+plot_ts_AMOC_ZOS_overlay(Results(1));
+% 
+% % 2) Scatter: AMOC vs ZOS Coastal Index
+plot_scatter_AMOC_CI_combined(Results(1), lags);
+% 
+% % 3) Lag-correlation maps (ensemble + 20 models)
+plot_lag_corr_nature(Results(1), coast, lags);
+% 
+% % 4) Lag–correlation heatmap (model × lag)
+plot_lag_corr_heatmap_CI(Results(1), lags);
+
+
+% ---------------- Time series panels: AMOC vs Coastal ZOS (20 models+Ensemble) ----------------
+function plot_ts_AMOC_ZOS_panels(R)
+
+% ---- Align all models to common length
+minLength = min(arrayfun(@(x) numel(x.AMOC), R.Data));
+years = R.period(1):(R.period(1)+minLength-1);
+N = numel(R.Data);
+
+amoc_all = arrayfun(@(x) x.AMOC(1:minLength), R.Data, 'uni', 0);
+zos_all  = arrayfun(@(x) x.coastal_index(1:minLength), R.Data, 'uni', 0);
+
+amoc_mat = cell2mat(amoc_all');
+zos_mat  = cell2mat(zos_all');
+
+% ---- Normalize (model-wise)
+for m = 1:N
+    amoc_mat(m,:) = (amoc_mat(m,:) - mean(amoc_mat(m,:),'omitnan')) ...
+                     / std(amoc_mat(m,:), 'omitnan');
+
+    zos_mat(m,:)  = (zos_mat(m,:)  - mean(zos_mat(m,:),'omitnan')) ...
+                     / std(zos_mat(m,:), 'omitnan');
+end
+
+% ---- Ensemble mean
+amoc_ens = mean(amoc_mat,1,'omitnan');
+zos_ens  = mean(zos_mat,1,'omitnan');
+
+% ---- Colors (Nature-safe)
+col_amoc = [0.20 0.40 0.80];
+col_zos  = [0.85 0.33 0.10];
+
+% ---- Layout
+ncol = 4;
+nrow = ceil((N+1)/ncol);
+
+figure('Units','inches','Position',[1 1 10 6],'Color','w');
+tiledlayout(nrow,ncol,'TileSpacing','compact','Padding','compact')
+
+% ---- Panel lettering (a–u)
+panel_labels = arrayfun(@(x) ['(' char('a'+x-1) ')'], ...
+                        1:(N+1), 'UniformOutput', false);
+
+% ================= Ensemble panel (tile 1) =================
+nexttile; hold on; box on
+
+text(0.01,0.98, panel_labels{1}, ...
+    'Units','normalized','FontSize',11, ...
+    'FontWeight','bold','VerticalAlignment','top');
+
+plot(years, amoc_ens, '-', 'Color', col_amoc, 'LineWidth', 2.2);
+plot(years, zos_ens,  '-','Color', col_zos,  'LineWidth', 2.2);
+
+[r_ens, ~] = corr_ac(amoc_ens', zos_ens');
+
+text(0.97,0.92, sprintf('r = %.2f', r_ens), ...
+    'Units','normalized', ...
+    'FontSize',10, ...
+    'FontWeight','bold', ...
+    'HorizontalAlignment','right');
+
+xlim([1850 2014])
+xticks(1850:50:2014)
+ylim([-5 5]);
+yticks(-5:2:5);
+
+% xlim([1993 2014])
+% xticks(1993:5:2014)
+% ylim([-5 5]);
+% yticks(-5:2:5);
+
+title('Ensemble mean','FontSize',10,'FontWeight','bold')
+ylabel('Normalized anomaly','FontWeight','bold')
+
+set(gca,'FontSize',10,'TickDir','out','LineWidth',1.1)
+yline(0,'k:','LineWidth',0.8,'HandleVisibility','off')
+xticklabels([])
+
+% ================= Individual models (tiles 2–21) =================
+for m = 1:N
+    ax = nexttile; hold on; box on
+    
+    text(0.01,0.98, panel_labels{m+1}, ...
+    'Units','normalized','FontSize',10, ...
+    'FontWeight','bold','VerticalAlignment','top');
+
+    plot(years, amoc_mat(m,:), '-',  'Color', col_amoc, 'LineWidth', 1.2);
+    plot(years, zos_mat(m,:),  '-', 'Color', col_zos,  'LineWidth', 1.2);
+
+    [r, ~] = corr_ac(amoc_mat(m,:)', zos_mat(m,:)');
+
+    text(0.97,0.92, sprintf('r = %.2f', r), ...
+    'Units','normalized', ...
+    'FontSize',9, ...
+    'FontWeight','bold', ...
+    'HorizontalAlignment','right');
+
+
+    title(R.Data(m).model_name,'FontSize',9)
+
+    xlim([1850 2014])
+    xticks(1850:50:2014)
+    ylim([-5 5]);
+    yticks(-5:2:5);
+
+    % xlim([1993 2014])
+    % xticks(1993:5:2014)
+    % ylim([-5 5]);
+    % yticks(-5:2:5);
+
+    set(gca,'FontSize',9,'TickDir','out','LineWidth',0.8)
+    yline(0,'k:','LineWidth',0.6,'HandleVisibility','off')
+
+    % ---- Only panel 21 gets x-axis labels
+    if m == N
+        xticks(1850:50:2014)
+        xlabel('Year','FontWeight','bold')
+    else
+        xticklabels([])
+    end
+
+    % ---- No y-labels for individual models
+    yticklabels([])
+end
+
+% ---- Legend (single, implicit)
+legend({'AMOC','Coastal ZOS'}, ...
+    'Location','southoutside','Orientation','horizontal','Box','off')
+
+end
+
+%% ---------------- Time series: AMOC & Coastal ZOS (Nature enhanced) ----------------
+function plot_ts_AMOC_ZOS_overlay(R)
+
+% ---- Align all models to common length
+minLength = min(arrayfun(@(x) numel(x.AMOC), R.Data));
+years = R.period(1):(R.period(1)+minLength-1);
+
+amoc_all = arrayfun(@(x) x.AMOC(1:minLength), R.Data, 'uni', 0);
+zos_all  = arrayfun(@(x) x.coastal_index(1:minLength), R.Data, 'uni', 0);
+
+amoc_mat = cell2mat(amoc_all');
+zos_mat  = cell2mat(zos_all');
+
+% ---- Normalize (model-wise)
+for m = 1:size(amoc_mat,1)
+    amoc_mat(m,:) = (amoc_mat(m,:) - mean(amoc_mat(m,:),'omitnan')) ...
+                     / std(amoc_mat(m,:),[],'omitnan');
+    zos_mat(m,:)  = (zos_mat(m,:)  - mean(zos_mat(m,:),'omitnan')) ...
+                     / std(zos_mat(m,:),[],'omitnan');
+end
+
+% ---- Explicit ensemble centering (important)
+zos_mat = zos_mat - mean(zos_mat,2,'omitnan');
+
+% ---- Ensemble mean
+amoc_ens = mean(amoc_mat,1,'omitnan');
+zos_ens  = mean(zos_mat,1,'omitnan');
+
+% r_ens = corr(amoc_ens', zos_ens', 'rows','complete');
+r_ens = R.ensemble_rbest;
+
+% ---- Colors (Nature-safe, colorblind-friendly)
+col_amoc_light = [0.70 0.82 0.92];   % light blue (models)
+col_zos_light  = [0.96 0.80 0.72];   % light red  (models)
+
+col_amoc_dark  = [0.20 0.40 0.80];   % ensemble AMOC
+col_zos_dark   = [0.85 0.33 0.10];   % ensemble ZOS
+
+% ---- Figure
+figure('Units','inches','Position',[1 1 9 3.6],'Color','w');
+hold on; box on;
+
+% ---- Individual models (background)
+for m = 1:size(amoc_mat,1)
+    plot(years, amoc_mat(m,:), '-', ...
+        'Color', col_amoc_light, ...
+        'LineWidth', 0.6, ...
+        'HandleVisibility','off');
+
+    plot(years, zos_mat(m,:), '--', ...
+        'Color', col_zos_light, ...
+        'LineWidth', 0.6, ...
+        'HandleVisibility','off');
+end
+
+% ---- Ensemble means (foreground)
+h1 = plot(years, amoc_ens, '-', ...
+    'Color', col_amoc_dark, ...
+    'LineWidth', 2.6);
+
+h2 = plot(years, zos_ens, '--', ...
+    'Color', col_zos_dark, ...
+    'LineWidth', 2.6);
+
+% ---- Ensemble correlation (inside panel)
+r_ens = corr(amoc_ens', zos_ens', 'rows','complete');
+
+text(0.97, 0.92, sprintf('r = %.2f', r_ens), ...
+    'Units','normalized', ...
+    'FontSize',11, ...
+    'FontWeight','bold', ...
+    'HorizontalAlignment','right');
+
+% ---- Dummy handles for individual models (legend only)
+h_amoc_models = plot(nan, nan, '-', ...
+    'Color', col_amoc_light, ...
+    'LineWidth', 1.0);
+
+h_zos_models = plot(nan, nan, '--', ...
+    'Color', col_zos_light, ...
+    'LineWidth', 1.0);
+
+% ---- Zero line
+yline(0,'k:','LineWidth',1,'HandleVisibility','off');
+
+% ---- Labels
+xlabel('Year','FontWeight','bold');
+ylabel('Normalized anomaly','FontWeight','bold');
+
+title(sprintf('AMOC and coastal sea level co-variability (%d–%d)', ...
+    R.period(1), R.period(2)), ...
+    'FontWeight','bold');
+
+% ---- Legend (ensemble only — Nature style)
+legend([h_amoc_models h_zos_models h1 h2], ...
+    {'AMOC (individual models)', ...
+     'Coastal ZOS (individual models)', ...
+     'AMOC (ensemble mean)', ...
+     'Coastal ZOS (ensemble mean)'}, ...
+    'Location','northwest', ...
+    'NumColumns',2, ...
+    'Box','off', ...
+    'FontSize',10);
+
+% ---- Axes styling
+set(gca,'FontSize',11,'LineWidth',1.2,'TickDir','out');
+xlim([years(1) years(end)]);
+ylim([-5 5])
+yticks(-5:1:5)
+
+end
+
+% ---------------- Scatter plot (Nature style, harmonized axes) ----------------
+function plot_scatter_AMOC_CI_combined(R, lags)
+
+N = numel(R.Data);
+nRows = 6; nCols = 4;
+
+xlims = [-5 5];
+ylims = [-5 5];
+
+% Fonts
+fontLabel = 12;
+fontTick  = 10;
+fontCorr  = 9;
+fontPanel = 11;
+
+% Colors
+color_ens   = [0.85 0.33 0.10];
+color_model = [0.85 0.33 0.10];
+
+letters = arrayfun(@(k) ['(' char(96+k) ')'],1:N+1,'uni',0);
+
+figure('Units','inches','Position',[1 1 10 9],'Color','w');
+tiledlayout(nRows,nCols,'TileSpacing','compact','Padding','compact');
+
+% ==========================================================
+% ENSEMBLE PANEL — LAG-ALIGNED
+% ==========================================================
+nexttile(1); hold on; box on;
+
+% ---- Align all models to common length
+minLength = min(arrayfun(@(x) numel(x.AMOC), R.Data));
+amoc_all = arrayfun(@(x) x.AMOC(1:minLength), R.Data, 'uni',0);
+zos_all  = arrayfun(@(x) x.coastal_index(1:minLength), R.Data, 'uni',0);
+
+amoc_mat = cell2mat(amoc_all');
+zos_mat  = cell2mat(zos_all');
+
+% ---- Normalize model-wise
+for m = 1:N
+    amoc_mat(m,:) = (amoc_mat(m,:) - mean(amoc_mat(m,:),'omitnan')) ...
+                     / std(amoc_mat(m,:), 'omitnan');
+    zos_mat(m,:)  = (zos_mat(m,:)  - mean(zos_mat(m,:),'omitnan')) ...
+                     / std(zos_mat(m,:),  'omitnan');
+end
+
+amoc_ens = mean(amoc_mat,1,'omitnan');
+zos_ens  = mean(zos_mat,1,'omitnan');
+
+% ---- Use precomputed ensemble stats from Results
+best_lag_ens = R.ensemble_best_lag;
+r_ens        = R.ensemble_rbest;
+fprintf('ENSEMBLE | best r = %.2f at lag %d\n', r_ens, best_lag_ens);
+
+if best_lag_ens > 0
+    Aplot = amoc_ens(1:end-best_lag_ens);
+    Zplot = zos_ens(1+best_lag_ens:end);
+else
+    Aplot = amoc_ens;
+    Zplot = zos_ens;
+end
+
+% ---- Scatter (lag-aligned!)
+scatter(Aplot, Zplot, 90, 'filled', ...
+    'MarkerFaceColor', color_ens, ...
+    'MarkerEdgeColor',[0 0 0]*0.15, ...
+    'MarkerFaceAlpha',0.85);
+
+% ---- Regression + correlation
+pfit = polyfit(Aplot, Zplot, 1);
+xfit = linspace(xlims(1),xlims(2),100);
+plot(xfit, polyval(pfit,xfit), '-', ...
+     'Color', color_ens, 'LineWidth', 2.5);
+
+r = corr(Aplot(:), Zplot(:), 'rows','complete');
+
+text(0.98,0.95, sprintf('r = %.2f', r), ...
+    'Units','normalized','HorizontalAlignment','right', ...
+    'FontSize',fontCorr,'FontWeight','bold');
+
+text(0.98,0.88, sprintf('lag = %d yr', best_lag_ens), ...
+    'Units','normalized','HorizontalAlignment','right', ...
+    'FontSize',fontCorr);
+
+title('Ensemble','FontWeight','bold','FontSize',fontLabel);
+text(0.02,0.95,letters{1},'Units','normalized', ...
+    'FontWeight','bold','FontSize',fontPanel);
+
+ylabel('Zos index (normalized)','FontWeight','bold');
+
+xlim(xlims); ylim(ylims);
+xline(0,'k-'); yline(0,'k-');
+set(gca,'FontSize',fontTick,'LineWidth',1.2,'XTickLabel',[]);
+
+% ==========================================================
+% INDIVIDUAL MODELS — LAG-ALIGNED
+% ==========================================================
+for m = 1:N
+    nexttile(m+1); hold on; box on;
+
+    A  = R.Data(m).AMOC(:);
+    CI = R.Data(m).coastal_index(:);
+
+    % ---- Normalize
+    A  = (A  - mean(A,'omitnan')) / std(A,'omitnan');
+    CI = (CI - mean(CI,'omitnan')) / std(CI,'omitnan');
+
+    % ---- Align using model-specific best lag
+    best_lag = R.best_lag_CI(m);
+
+    if best_lag > 0
+        Aplot  = A(1:end-best_lag);
+        CIplot = CI(1+best_lag:end);
+    else
+        Aplot  = A;
+        CIplot = CI;
+    end
+
+    scatter(Aplot, CIplot, 60, 'filled', ...
+        'MarkerFaceColor', color_model, ...
+        'MarkerEdgeColor',[0 0 0]*0.15, ...
+        'MarkerFaceAlpha',0.85);
+
+    % ---- Regression + r from SAME data
+    valid = ~isnan(Aplot) & ~isnan(CIplot);
+    if sum(valid) >= 5
+        pfit = polyfit(Aplot(valid), CIplot(valid),1);
+        plot(xfit, polyval(pfit,xfit), '-', ...
+             'Color', color_model, 'LineWidth', 1.5);
+        r = corr(Aplot(valid), CIplot(valid), 'rows','complete');
+    else
+        r = NaN;
+    end
+
+    text(0.98,0.95, sprintf('r = %.2f', r), ...
+        'Units','normalized','HorizontalAlignment','right', ...
+        'FontSize',fontCorr,'FontWeight','bold');
+
+    text(0.98,0.88, sprintf('lag = %d yr', best_lag), ...
+        'Units','normalized','HorizontalAlignment','right', ...
+        'FontSize',fontCorr);
+
+    title(R.Data(m).model_name,'FontSize',fontLabel,'Interpreter','none');
+    text(0.02,0.95,letters{m+1},'Units','normalized', ...
+        'FontWeight','bold','FontSize',fontPanel);
+
+    xlim(xlims); ylim(ylims);
+    xline(0,'k-'); yline(0,'k-');
+
+    % ---- Axes labels
+    if ceil((m+1)/nCols) == nRows
+        xlabel('AMOC anomaly (normalized)','FontWeight','bold');
+    else
+        set(gca,'XTickLabel',[]);
+    end
+
+    if mod(m,nCols) ~= 1
+        set(gca,'YTickLabel',[]);
+    end
+
+    set(gca,'FontSize',fontTick,'LineWidth',1.2);
+end
+
+sgtitle(sprintf('Lag-aligned AMOC vs coastal ZOS relationship (%d–%d)', ...
+    R.period(1), R.period(2)), ...
+    'FontWeight','bold','FontSize',fontLabel+2);
+
+end
+
+% ---------------- Lag-correlation maps (Nature style) ----------------
+function land_mask = rasterize_coastline(lon, lat, na, tol)
+if nargin < 4, tol = 0.75; end
+
+[Lon,Lat] = meshgrid(lon,lat);
+land_mask = false(size(Lon));
+
+for k = 1:size(na,1)
+    land_mask = land_mask | ...
+        (abs(Lon - na(k,1)) <= tol & abs(Lat - na(k,2)) <= tol);
+end
+end
+
+function plot_lag_corr_nature(R, coast, lags)
+[xx,yy] = meshgrid(R.lon,R.lat);
+stip_step = 3;
+N = numel(R.Data);
+posLagIdx = find(lags>0);
+
+% ---------------- Ensemble mean ----------------
+rstack = cat(3,R.rmax_maps{:});
+ensemble_rmax = mean(rstack,3,'omitnan');
+
+sig_stack = cat(3,R.rmax_sig{:});
+frac_sig = mean(sig_stack,3,'omitnan');
+ens_sig = (frac_sig >= 0.5) & R.ensemble_sig; %(≥50% of models significant)
+
+% ---------------- Figure layout ----------------
+figure('Color','w','Position',[50 50 1800 1000]);
+ncol = ceil(sqrt(N+1)); nrow = ceil((N+1)/ncol);
+tiledlayout(nrow,ncol,'TileSpacing','compact','Padding','compact');
+
+% ==========================================================
+% ENSEMBLE PANEL
+% ==========================================================
+nexttile; hold on
+
+imagesc(R.lon,R.lat,ensemble_rmax');
+set(gca,'YDir','normal'); axis tight
+xlim([min(R.lon) max(R.lon)]);
+ylim([min(R.lat) max(R.lat)]);
+caxis([-1 1])
+
+% --- Stippling
+mask = false(size(ens_sig));
+mask(1:stip_step:end,1:stip_step:end) = true;
+stip = ens_sig & mask;
+scatter(xx(stip)',yy(stip)',10,'k','filled','MarkerFaceAlpha',0.5)
+
+% --- Land overlay (uniform!)
+plot(coast.lon, coast.lat, 'k', 'LineWidth', 1.1)
+
+% Boxes
+plot([285 305 305 285 285],[29 29 39 39 29],'k','LineWidth',1.2)
+plot([302 322 322 302 302],[43 43 53 53 43],'k','LineWidth',1.2)
+
+title('Ensemble mean','FontWeight','bold')
+yticks(0:10:60)
+yticklabels({'0°','10°N','20°N','30°N','40°N','50°N','60°N'})
+xticks([])
+
+if exist('cmocean','file')
+    colormap(cmocean('balance'))
+else
+    colormap(parula)
+end
+
+% ==========================================================
+% INDIVIDUAL MODELS
+% ==========================================================
+for m = 1:N
+    nexttile; hold on
+
+    imagesc(R.lon,R.lat,R.rmax_maps{m}');
+    set(gca,'YDir','normal'); axis tight
+    xlim([min(R.lon) max(R.lon)]);
+    ylim([min(R.lat) max(R.lat)]);
+    caxis([-1 1])
+
+    % --- Stippling
+    sig = R.rmax_sig{m};
+    mask = false(size(sig));
+    mask(1:stip_step:end,1:stip_step:end) = true;
+    stip = sig & mask;
+    scatter(xx(stip)',yy(stip)',10,'k','filled','MarkerFaceAlpha',0.4)
+
+    % --- Land overlay (SAME mask!)
+    plot(coast.lon, coast.lat, 'k', 'LineWidth', 1.1)
+
+    yticks([])
+
+    % Only bottom row: X labels
+    if m == 20
+        xticks(270:20:360)
+        xticklabels({'90°W','70°W','50°W','30°W','10°W'})
+        % xlabel('Longitude','FontWeight','bold')
+    else
+        xticks([])
+    end
+
+    title(R.Data(m).model_name,'FontSize',12)
+end
+
+% ---------------- Colorbar ----------------
+cb = colorbar;
+cb.Layout.Tile = 'east';
+cb.Label.String = 'Correlation (r)';
+cb.Label.FontWeight = 'bold';
+
+end
+% ==========================================================
+% Lag–Correlation Heatmap (Model × Lag) — Nature style
+% ==========================================================
+function plot_lag_corr_heatmap_CI(R, lags)
+
+% --- Restrict to positive lags only (AMOC leads ZOS)
+posLagIdx = lags >= 0;
+lags_pos  = lags(posLagIdx);
+
+lag_corr = R.lag_corr_CI(:,posLagIdx);   % [model × positive lag]
+best_lag = R.best_lag_CI;        % [model × 1]
+model_names = {R.Data.model_name};
+
+N = size(lag_corr,1);
+nLags = numel(lags_pos);   % number of positive lags only
+
+% ---------------- Ensemble mean ----------------
+ens_corr = mean(lag_corr,1,'omitnan');
+
+% ---------------- Build matrix -----------------
+% Row 1 = Ensemble, Rows 2–21 = models
+H = nan(N+1, nLags);
+H(1,:) = ens_corr;
+H(2:end,:) = lag_corr;
+
+assert(size(H,2) == numel(lags_pos), ...
+    'Lag dimension mismatch: heatmap columns must equal number of positive lags')
+% ---------------- Figure -----------------------
+figure('Units','inches','Position',[1 1 10 6],'Color','w');
+ax = axes; hold on;
+imagesc(lags_pos, 1:N+1, H);
+set(gca,'YDir','normal');
+caxis([-1 1]);
+
+% xlim([min(lags_pos) 11])
+% xticks(min(lags_pos):1:11)
+
+xlim([-1 11])
+xticks(-1:1:11)
+% ---------------- Axes labels ------------------
+yticks(1:N+1)
+yticklabels(['Ensemble', model_names])
+xlabel('Lag (years)','FontWeight','bold','FontSize',12)
+ylabel('Model','FontWeight','bold','FontSize',12)
+
+% ---------------- Best-lag markers --------------
+% Only for models (positive lags)
+for m = 1:N
+    if ~isnan(best_lag(m))
+        plot(best_lag(m), m+1, 'ko', ...
+            'MarkerFaceColor','k', ...
+            'MarkerSize',4);
+    end
+end
+
+% ---------------- Styling ----------------------
+set(gca,'FontSize',10,'LineWidth',1.2,'TickLength',[0.015 0.015]);
+
+if exist('cmocean','file')
+    colormap(cmocean('balance'))
+else
+    colormap(parula)
+end
+
+% ---------------- Colorbar ---------------------
+cb = colorbar;
+cb.Label.String = 'Correlation (r)';
+cb.Label.FontWeight = 'bold';
+cb.FontSize = 10;
+
+% ---------------- Title ------------------------
+title(sprintf('Lagged Correlation: AMOC vs ZOS Coastal Index (%d–%d)', ...
+    R.period(1), R.period(2)), ...
+    'FontWeight','bold','FontSize',14);
+
+end
+
+% -------------------- Effective DOF -----------------------
+function Neff = effective_dof(x, y)
+% Computes effective sample size accounting for lag-1 autocorrelation
+% Following Bretherton et al. (1999)
+
+x = x(:); y = y(:);
+valid = ~isnan(x) & ~isnan(y);
+x = x(valid); y = y(valid);
+
+N = numel(x);
+if N < 3
+    Neff = NaN;
+    return
+end
+
+% Lag-1 autocorrelation
+r1x = corr(x(1:end-1), x(2:end), 'rows','complete');
+r1y = corr(y(1:end-1), y(2:end), 'rows','complete');
+
+if abs(r1x*r1y) >= 1
+    Neff = NaN;
+    return
+end
+
+Neff = N * (1 - r1x*r1y) / (1 + r1x*r1y);
+
+% Bound Neff
+Neff = max(3, min(Neff, N));
+end
+
+function [r, p] = corr_ac(x, y)
+% Correlation with autocorrelation-adjusted p-value
+% Ensures scalar r (required for t-statistic)
+
+x = x(:);
+y = y(:);
+
+valid = ~isnan(x) & ~isnan(y);
+x = x(valid);
+y = y(valid);
+
+if numel(x) < 3
+    r = NaN;
+    p = NaN;
+    return
+end
+
+R = corr(x, y, 'rows','complete');
+r = R(1);   % force scalar
+
+Neff = effective_dof(x, y);
+if isnan(Neff)
+    p = NaN;
+    return
+end
+
+tstat = r * sqrt((Neff - 2) / (1 - r^2));
+p = 2 * (1 - tcdf(abs(tstat), Neff - 2));
+end
