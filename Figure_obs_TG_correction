@@ -1,0 +1,1080 @@
+% Clear workspace (optional)
+clc,clear;close all;
+
+%% Set base directories (update for your machine)
+basedir = '/Users/emmanueleresanya/Desktop/Mac/AMOC_Sealevel_Constraint/CMIP6/Gerard_AMOC_zos/psmsl_amoc_index/AMOC_constraints/'; 
+datadir = [basedir 'data/'];
+figdir  = [basedir 'figures/'];
+
+% Load sea surface height and RAPID AMOC data
+load([datadir 'ssh']);%1993-2022
+% load([datadir 'moc_transports']);
+
+% Load Copernicus AMOC data
+reanal.amoc = ncread('/Users/emmanueleresanya/Desktop/Mac/AMOC_Sealevel_Constraint/CMIP6/Gerard_AMOC_zos/psmsl_amoc_index/GLOBAL_OMI_NATLANTIC_amoc_max26n_timeseries_19930115_P20220428.nc', 'amoc_mean');
+reanal.time = ncread('/Users/emmanueleresanya/Desktop/Mac/AMOC_Sealevel_Constraint/CMIP6/Gerard_AMOC_zos/psmsl_amoc_index/GLOBAL_OMI_NATLANTIC_amoc_max26n_timeseries_19930115_P20220428.nc', 'time') + datetime(1950,1,1);
+
+% Remove missing month from SSH data
+ssh.sla(:,:,1) = [];
+ssh.time(1) = [];
+
+% Detrend SSH time series
+dim = size(ssh.sla);
+for i = 1:dim(1)
+    for j = 1:dim(2)
+        ssh.sla(i,j,:) = detrend(squeeze(ssh.sla(i,j,:)));
+    end
+end
+
+% Convert to annual means
+dvec = datevec(ssh.time);
+years = unique(dvec(:,1));
+ssh.sla_yr = nan(dim(1), dim(2), length(years));
+
+for k = 1:length(years)
+    ssh.sla_yr(:,:,k) = mean(ssh.sla(:,:,dvec(:,1) == years(k)), 3);
+end
+
+% === SSH Index & SSH Coast Index Calculation ===
+% Extract dimensions
+lon_zos = ssh.lon; 
+lat_zos = ssh.lat;
+zos_data = ssh.sla_yr; % [lon x lat x year]
+% Define regions
+lon_range_zos_1 = find(lon_zos >= 270 & lon_zos <= 360);%90°W–0°W
+lat_range_zos_1 = find(lat_zos >= 0   & lat_zos <= 40);
+lat_range_zos_2 = find(lat_zos >= 40  & lat_zos <= 60);
+
+lon_range_zos_2  = find(lon_zos >= 300 & lon_zos <= 320);%60°W–40°W 
+lon_range_zos_2a = find(lon_zos >= 310 & lon_zos <= 330);%50°W–30°W
+lat_range_zos_3 = find(lat_zos >= 20  & lat_zos <= 40);
+lat_range_zos_4 = find(lat_zos >= 40  & lat_zos <= 60);
+
+% Compute averages and indices
+zos_mean_1 = squeeze(mean(mean(zos_data(lon_range_zos_1, lat_range_zos_1, :), 1, 'omitnan'), 2, 'omitnan'));
+zos_mean_2 = squeeze(mean(mean(zos_data(lon_range_zos_1, lat_range_zos_2, :), 1, 'omitnan'), 2, 'omitnan'));
+zos_index = zos_mean_1 - zos_mean_2;
+zos_index = zos_index - mean(zos_index, 'omitnan');
+
+zos_mean_coast_1 = squeeze(mean(mean(zos_data(lon_range_zos_2, lat_range_zos_3, :), 1, 'omitnan'), 2, 'omitnan'));
+zos_mean_coast_2 = squeeze(mean(mean(zos_data(lon_range_zos_2a, lat_range_zos_4, :), 1, 'omitnan'), 2, 'omitnan'));
+zos_coast_index = zos_mean_coast_1 - zos_mean_coast_2;
+zos_coast_index = zos_coast_index - mean(zos_coast_index, 'omitnan');
+
+% Convert SSH to mm
+ssh_north_mm = zos_mean_coast_2 * 1000;% Convert SSH (m) to mm
+ssh_south_mm = zos_mean_coast_1 * 1000;
+
+%%
+% Load in Monthly MSL sites
+x = [-81.7 -70];
+y = [24 43];
+Y = [1880:2025]'; % if the end data changes, it needs to change here
+dset = '2024'; % or 2024 or 2016 for different versions of the psmsl datasets
+%-------------------------
+
+% 1. Load in Data
+fid=fopen(['data/rlr_monthly/filelist.txt']);
+co = 0;
+while 1
+    tline = fgetl(fid);
+    if tline == -1
+        break
+    end
+    co = co+1;
+     C(co,1) = str2num(tline(1:6));
+     La(co,2) = str2num(tline(7:18));
+     La(co,1) = str2num(tline(19:31));
+     %N{co,1} = tline(33:73);
+     C(co,2) = str2num(tline(74:78));
+     C(co,3) = str2num(tline(79:83));
+    
+end
+fclose(fid);
+clear co fid tline
+%-------------------------
+
+% 2. Select out sites
+sa = find( La(:,1)>=x(1) & La(:,1)<=x(2) & La(:,2)>=y(1) & La(:,2)<=y(2) );
+clear L
+%-------------------------
+
+% Load in Sites
+C = C(sa,:);
+
+%load in monthly data
+[N,L,DB,DBm,DBf] = control1_rlr(C(:,1),Y);
+N = N';
+clear DBm DBf ans
+
+co= 0;
+for i = Y';
+   for j = 1:12
+       co =co+1;
+       Ym(co,1) = i + ((j-0.5)/12);
+   end
+end
+clear i j co
+%-------------------------
+
+% 5. Plot Sites
+
+%load land
+land = load('data/LAND/World_5000000.dat');
+figure('units','normalized','position',[0.1 0.2 0.48 0.65]);
+hold on
+plot(land(:,1), land(:,2), '-k','linewidth',2);
+plot(La(:,1),La(:,2),'ok','markerfacecolor','r','markersize',10);
+plot(La(sa,1),La(sa,2),'+b','markerfacecolor','b','markersize',10);
+grid
+axis equal
+axis([x(1) x(2) y(1) y(2)]);
+xlabel('Longitude','fontweight','bold','fontsize',18)
+ylabel('Latitude','fontweight','bold','fontsize',18)
+set(gca,'fontsize',14,'fontweight','bold')
+%-------------------------
+
+% 2. Calculate data lengths
+[le1,ns] = size(DB);
+for i = 1:ns
+    j = find(~isnan(DB(:,i)));
+    LE(i,1) = Ym(j(1));
+    LE(i,2) = Ym(j(end));
+    LE(i,3) = Ym(j(end))-Ym(j(1))+1;
+    LE(i,4) = length(j)./12;
+    clear j
+end
+%-------------------------
+
+% 3. Choose sites
+s = find(LE(:,4)<40);
+N(s) = [];
+L(s,:) = [];
+LE(s,:) = [];
+DB(:,s) = [];
+C(s,:) = [];
+[le1,ns] = size(DB);
+
+%
+if strmatch(dset, '2024')
+%Change order
+o = [1:9,12,11,13,14,10,15:21,23,24,22,25,27,26,28:30];
+% o = [15 11 2 18 7 19 31 1  3  5  8 12 16 17];
+DB = DB(:,o);
+L = L(o,:);
+LE = LE(o,:);
+N = N(o,:);
+C = C(o,:);
+
+end
+% %-------------------------
+if strmatch(dset, '2016')
+%Change order
+o = [1:9,12,11,13,14,10,15:21,23,24,22,25,27,26,28:30];
+% o = [15 11 2 18 7 19 31 1 2 3  5 7 8 17];
+DB = DB(:,o);
+L = L(o,:);
+LE = LE(o,:);
+N = N(o,:);
+end
+
+
+% 5. Plot data lengths
+[le1,ns] = size(DB);
+DBl = DB;
+for i = 1:ns
+    j = find(~isnan(DB(:,i)));
+    DBl(j,i) = i;
+    clear j
+end
+clear i
+
+figure('units','normalized','position',[0.1 0.1 0.7 0.8]);
+axes('units','normalized','position',[0.02 0.05 0.4 0.93]);
+hold on
+plot(land(:,1), land(:,2), '-k','linewidth',2);
+plot(L(:,1),L(:,2),'ok','markerfacecolor','r','markersize',10);
+for i = 1:ns
+   text(L(i,1)+0.2,L(i,2),num2str(i),'fontweigh','bold','fontsize',16);
+end
+grid
+axis equal
+axis([x(1) x(2) y(1) y(2)]);
+xlabel('Longitude','fontweight','bold','fontsize',20)
+ylabel('Latitude','fontweight','bold','fontsize',20)
+set(gca,'fontsize',18,'fontweight','bold')
+box on 
+
+axes('units','normalized','position',[0.42 0.05 0.39 0.93]);
+hold on
+plot(Ym,DBl,'-o','markersize',8,'color',[0.3 0.3 0.3],'markerfacecolor',[0.3 0.3 0.3]);
+xlabel('Year','fontweight','bold','fontsize',20)
+%ylabel('Number of sites','fontweight','bold','fontsize',20)
+set(gca,'fontweight','bold','fontsize',18);
+set(gca,'xlim',[1890 2016],'ylim',[0 ns+1],'ytick',[])
+box on
+for i = 1:ns
+    text(2018,i,[num2str(i,'%2.2d'),'. ',N{i},' '],'fontsize',15,'fontweight','bold')
+end
+grid
+
+
+%-------------------------
+% 4. Save data
+clear le1 i s sa La
+
+%cross ref with gps
+
+M = csvread("data/avg_rates.csv", 2);
+
+% match the rates with C(:,1)
+% i think C(:,1) are psmsl numeric ids as are M(:,1)
+
+[le1,ns] = size(DB);
+for i = 1:ns
+    
+    k = find(~isnan(DB(:,i)));
+
+    u = find(C(i,1) == M(:,1));
+
+    [tr,S,m,r2,se,b,tr2] = trend(Ym(k),DB(k,i),Ym);
+    
+    DBd(:,i) = DB(:,i)-tr2;
+    
+
+end
+%-------------------------
+
+% 3. Separate season and the inter-annual
+
+%Inter-annual
+DBi(1:le1,1:ns) = NaN;
+[le1,ns] = size(DB);
+for i = 1:ns
+    for j = 6:le1-6
+        m = j-5;
+        n = j+6;
+        DBi(j,i) = mean(DBd(m:n,i));
+        
+    end
+    
+    
+end
+
+%Seasonal cyclye
+DBs = DBd-DBi;
+%-------------------------
+
+% Annual
+
+for k = 1:ns
+    co = 0;
+    for i = Y'
+        co = co+1;
+        j = find( Ym >= i & Ym<(i+1) );
+        m = find(~isnan(DBi(j,k)));
+        if length(m)<9
+            DBa(co,k) = NaN;
+        else
+            DBa(co,k) = nanmean(DBd(j,k));
+        end
+    end
+    
+    
+end
+%-------------------------
+
+% Figures
+of = 0.5;
+
+figure('units','normalized','position',[0.1 0.1 0.7 0.8]);
+axes('units','normalized','position',[0.08 0.05 0.9 0.9]);
+hold on
+cm = colormap(jet(ns));
+for i = 1:ns
+    plot(Ym,DB(:,i)./1000+of*(i),'-','linewidth',3,'color',cm(i,:));
+    k = find(~isnan(DB(:,i)));
+    [tr,S,m,r2,se,b,tr2] = trend(Ym(k),DB(k,i),Ym);
+    plot(Ym(k),tr./1000+of*(i),'-k','linewidth',2)
+    %clear k tr S m r2 se b tr2
+end
+xlabel('Year','fontweight','bold','fontsize',20)
+ylabel('Level (m) (arbitrarily offset)','fontweight','bold','fontsize',20)
+set(gca,'fontweight','bold','fontsize',20);
+set(gca,'xlim',[1890 2014])
+% set(gca,'ylim',[7 22.5],'ytick',[7:0.5:23])
+grid
+title('(a) Raw Monthly Mean Sea Level','fontweight','bold','fontsize',20);
+caxis([1 ns+1]);
+cb = colorbar('fontweight','bold','fontsize',16,'ytick',[1.5:1:ns+0.5],'yticklabel',[1:1:ns]);
+set(get(cb,'title'),'string','     Site No.','fontweight','bold','fontsize',16);
+box on
+
+%-------------------------
+of = 0.5;
+figure('units','normalized','position',[0.1 0.1 0.7 0.8]);
+axes('units','normalized','position',[0.08 0.05 0.9 0.9]);
+hold on
+cm = colormap(jet(ns));
+for i = 1:ns
+    plot(Ym,DBs(:,i)./1000+of*(i),'-','linewidth',3,'color',cm(i,:));
+end
+xlabel('Year','fontweight','bold','fontsize',20)
+ylabel('Level (m) (arbitrarily offset)','fontweight','bold','fontsize',20)
+set(gca,'fontweight','bold','fontsize',20);
+set(gca,'xlim',[1890 2014])
+% set(gca,'ylim',[0 of.*(i+1)],'ytick',[0:0.5:15])
+grid
+title('(b) Seasonal Mean Sea Level','fontweight','bold','fontsize',20);
+caxis([1 ns+1]);
+cb = colorbar('fontweight','bold','fontsize',16,'ytick',[1.5:1:ns+0.5],'yticklabel',[1:1:ns]);
+set(get(cb,'title'),'string','     Site No.','fontweight','bold','fontsize',16);
+box on
+%-------------------------
+of = 0.1;
+figure('units','normalized','position',[0.1 0.1 0.7 0.8]);
+axes('units','normalized','position',[0.08 0.05 0.9 0.9]);
+hold on
+cm = colormap(jet(ns));
+for i = 1:ns
+    plot(Ym,DBi(:,i)./1000+of*(i),'-','linewidth',3,'color',cm(i,:));
+end
+xlabel('Year','fontweight','bold','fontsize',20)
+ylabel('Level (m) (arbitrarily offset)','fontweight','bold','fontsize',20)
+set(gca,'fontweight','bold','fontsize',20);
+set(gca,'xlim',[1890 2017])
+% set(gca,'ylim',[0 of.*(i+1)])
+grid
+title('(c) 12-monthly running Mean Sea Level','fontweight','bold','fontsize',20);
+caxis([1 ns+1]);
+cb = colorbar('fontweight','bold','fontsize',16,'ytick',[1.5:1:ns+0.5],'yticklabel',[1:1:ns]);
+set(get(cb,'title'),'string','     Site No.','fontweight','bold','fontsize',16);
+box on
+
+% Ym, DBi
+years = unique(floor(Ym));
+
+n = years + nan;
+s = years + nan;
+
+for k = 1:length(years)
+    yi = Ym >= years(k) & Ym < years(k) + 1;
+    if sum(yi) < 12; continue; end % full years?
+
+    n(k)=nanmean(nanmean(DBi(yi,8:end),2));%Northern sites
+    s(k)=nanmean(nanmean(DBi(yi,1:7),2)); %Southern sites
+end
+
+%%
+south_filled = fillmissing(s,'linear');
+north_filled = fillmissing(n,'linear');
+
+i = south_filled - north_filled;% South - North Gradient
+% i = s-n; %Difference between south and north, used as a sea level gradient index.
+
+figure; hold on; box on;
+% plot(Ym,nanmean(DBi(:,1:6),2)-nanmean(DBi(:,7:end),2),'k')
+plot(years,i,'k.-');
+% plot(years,efilter(i,1,1/7),'r','linewidth',4)
+% Smooth with a 7-year moving average
+i_smooth = movmean(i, 3, 'omitnan');
+plot(years, i_smooth, 'r', 'LineWidth', 3);
+ylim([-100 100]);
+xlim([1930 2024])
+title(['Sea-level Index [', dset, ' data]'])
+plot(xlim,[0 0],'k')
+xlabel('Year')
+ylabel('mm')
+
+set(gcf,'paperpositionmode','auto')
+print('-dpng',['updated_ind_',dset,'.png'])
+
+%% Correlation of Tide Gauge vs Satellite SSH
+dbi_years = 1880:2025;   % 146 years
+ssh_years = 1993:2022;   % 30 years
+
+% Convert DBi to annual means (assuming monthly data)
+DBi_annual = NaN(length(dbi_years), size(DBi,2));
+for y = 1:length(dbi_years)
+    idx = (1 + (y-1)*12) : (y*12);
+    DBi_annual(y,:) = mean(DBi(idx,:),1);
+end
+
+% Select years overlapping with SSH
+[~,ssh_idx] = ismember(ssh_years, dbi_years);
+DBi_match = DBi_annual(ssh_idx,:);  % 30x30
+
+south_sites = 1:7;
+north_sites = 8:30;
+
+% Correlation for South
+corr_south = NaN(1,length(south_sites));
+for si = 1:length(south_sites)
+    corr_south(si) = corr(DBi_match(:,south_sites(si)), ssh_south_mm, 'Rows','complete');
+end
+
+% Correlation for North
+corr_north = NaN(1,length(north_sites));
+for ni = 1:length(north_sites)
+    corr_north(ni) = corr(DBi_match(:,north_sites(ni)), ssh_north_mm, 'Rows','complete');
+end
+
+% Plot GRL-quality
+southColor = [0 0.45 0.74];  % blue
+northColor = [0.85 0.33 0.10]; % orange-red
+
+figure('Units','inches','Position',[1 1 7 4.5], 'Color','w'); 
+hold on;
+
+% Dummy bars for legend
+hSouth = bar(NaN, NaN, 'FaceColor', southColor, 'EdgeColor', 'none'); 
+hNorth = bar(NaN, NaN, 'FaceColor', northColor, 'EdgeColor', 'none');
+
+% Plot bars
+for si = 1:length(corr_south)
+    bar(si, corr_south(si), 'FaceColor', southColor, 'EdgeColor', 'none', 'BarWidth', 0.7);
+end
+for ni = 1:length(corr_north)
+    bar(length(corr_south)+ni, corr_north(ni), 'FaceColor', northColor, 'EdgeColor', 'none', 'BarWidth', 0.7);
+end
+
+% Zero line reference
+plot([0 length(corr_south)+length(corr_north)+1], [0 0], '--', 'Color', [0.4 0.4 0.4], 'LineWidth', 1.2);
+
+% Axis settings
+xticks(1:(length(corr_south)+length(corr_north)));
+xticklabels([arrayfun(@(x) sprintf('S%d', x), south_sites, 'UniformOutput', false), ...
+             arrayfun(@(x) sprintf('N%d', x), north_sites, 'UniformOutput', false)]);
+xtickangle(45);
+ylabel('Correlation with Satellite SSH', 'FontSize',12,'FontWeight','bold');
+xlabel('Tide Gauge Stations', 'FontSize',12,'FontWeight','bold');
+set(gca, 'FontSize',10, 'FontWeight','bold', 'LineWidth',1, 'TickDir','out', 'Box','off', ...
+         'YGrid','on','GridLineStyle','--');
+
+% Legend
+legend([hSouth, hNorth], {'South sites','North sites'}, 'Location','northeast', 'Box','off', 'FontSize',10);
+
+% Tight layout
+set(gca, 'LooseInset', max(get(gca,'TightInset'), 0.02));
+
+% Save high-resolution figure
+print([figdir 'TG_SSH_correlation_GRL'],'-dpng','-r600');
+
+%% Calculate satelite linear trends in the south and north
+trend_ssh_north = polyfit(ssh_years, ssh_north_mm, 1);
+trend_ssh_south = polyfit(ssh_years, ssh_south_mm, 1);
+
+% Calculate tide gauge trends (1993–2022) and compare to satellite SSH
+% Preallocate arrays
+tg_trends = NaN(1, ns);
+tg_region = strings(1, ns); % 'North' or 'South'
+
+% Loop over sites
+for si = 1:ns
+    % Determine if site is North or South
+    if ismember(si, south_sites)
+        tg_region(si) = "South";
+    else
+        tg_region(si) = "North";
+    end
+    
+    % Get site time series (annual mean DBi)
+    tg_series = DBi_match(:, si); % already matches 1993–2022
+    
+    % Calculate linear trend in mm/year
+    good = ~isnan(tg_series);
+    if sum(good) > 1
+        p = polyfit(ssh_years(good), tg_series(good), 1);
+        tg_trends(si) = p(1); % mm/year (DBi_match is already in mm)
+    end
+end
+
+% Satellite SSH trends (mm/year)
+sat_trend_south = trend_ssh_south(1); % already in mm/year
+sat_trend_north = trend_ssh_north(1);
+
+% Calculate offsets: tide gauge trend - satellite SSH trend (per region)
+trend_offsets = NaN(1, ns);
+for si = 1:ns
+    if tg_region(si) == "South"
+        trend_offsets(si) = tg_trends(si) - sat_trend_south;
+    else
+        trend_offsets(si) = tg_trends(si) - sat_trend_north;
+    end
+end
+
+% Create results table
+station_ids = C(:,1);
+station_names = N;
+T = table( ...
+    station_ids, ...
+    station_names, ...
+    tg_region', ...
+    tg_trends', ...
+    repmat(NaN, ns, 1), ... % placeholder for sat trend
+    trend_offsets', ...
+    'VariableNames', {'StationID', 'Name', 'Region', 'TG_Trend_mm_per_yr', 'Sat_SSH_Trend_mm_per_yr', 'Offset_mm_per_yr'} ...
+);
+
+% Fill satellite trends column
+for si = 1:ns
+    if tg_region(si) == "South"
+        T.Sat_SSH_Trend_mm_per_yr(si) = sat_trend_south;
+    else
+        T.Sat_SSH_Trend_mm_per_yr(si) = sat_trend_north;
+    end
+end
+
+% Display table in Command Window
+disp(T);
+
+% Save to CSV
+writetable(T, [datadir 'TG_SSH_trend_offsets.csv']);
+
+
+%% Plot trend offsets as grouped bar chart
+[~, sortIdx] = sort(T.Offset_mm_per_yr, 'descend');
+T_sorted = T(sortIdx, :);
+
+% Colorblind-safe palette
+southColor = [0.0 0.45 0.74]; % blue
+northColor = [0.85 0.33 0.10]; % orange-red
+zeroLineColor = [0.4 0.4 0.4]; % dark gray
+
+figure('Units','inches','Position',[1 1 7 4.5], 'Color','w'); 
+hold on;
+
+% Plot bars and store handles
+hSouth = bar(NaN, NaN, 'FaceColor', southColor, 'EdgeColor', 'none'); % dummy for legend
+hNorth = bar(NaN, NaN, 'FaceColor', northColor, 'EdgeColor', 'none'); % dummy for legend
+
+for si = 1:height(T_sorted)
+    if strcmp(T_sorted.Region{si}, 'South')
+        faceCol = southColor;
+    else
+        faceCol = northColor;
+    end
+    bar(si, T_sorted.Offset_mm_per_yr(si), ...
+        'FaceColor', faceCol, 'EdgeColor', 'none', 'BarWidth', 0.75);
+end
+
+% Zero offset reference line (dashed, dark gray)
+hZero = plot([1 height(T_sorted)], [0 0], '--', 'Color', zeroLineColor, 'LineWidth', 1.2);
+
+% Axis settings
+xticks(1:height(T_sorted));
+xticklabels(T_sorted.Name);  
+xtickangle(45);
+ylabel('\Delta Trend offset (TG - Satellite) [mm yr^{-1}]', 'FontSize', 12, 'FontWeight', 'bold');
+xlabel('Stations', 'FontSize', 12, 'FontWeight', 'bold');
+
+set(gca, 'FontSize', 10, 'FontWeight', 'bold', ...
+         'LineWidth', 1, 'TickDir', 'out', ...
+         'Box', 'off', 'GridLineStyle', '--', 'YGrid', 'on');
+
+% Legend with correct colors
+legend([hSouth, hNorth, hZero], ...
+       {'South sites','North sites','Zero offset'}, ...
+       'Location','northeast', 'Box', 'off', 'FontSize', 10);
+
+% Tight layout
+set(gca, 'LooseInset', max(get(gca,'TightInset'), 0.02));
+
+% Save high-resolution PNG
+print([figdir 'TG_SSH_trend_offsets_sorted_GRL_names'],'-dpng','-r600');
+
+
+%% Adjust TG data to match SSH trends
+
+DBi_adjusted = DBi_match;  % initialize adjusted dataset
+t0 = ssh_years(1);
+dt = ssh_years - t0;       % 1×30 row vector
+dt = dt(:);                % convert to 30×1 column vector
+
+for si = 1:ns
+    if ~isnan(trend_offsets(si))
+        % The offset is already computed per site, no need to check North/South
+        offset = trend_offsets(si);
+
+        % Apply the linear adjustment over time
+        DBi_adjusted(:, si) = DBi_match(:, si) - offset * dt;
+    end
+end
+
+%% Colorblind-safe palette
+southColor = [0.0 0.45 0.74]; % bluex
+northColor = [0.85 0.33 0.10]; % orange-red
+
+north_idx = find(strcmp(T.Region, 'North'));
+south_idx = find(strcmp(T.Region, 'South'));
+
+r_north = nan(length(north_idx),1);
+r_south = nan(length(south_idx),1);
+
+% Compute correlations
+for i = 1:length(north_idx)
+    si = north_idx(i);
+    r_north(i) = corr(DBi_adjusted(:, si), ssh_north_mm, 'Rows','complete');
+end
+
+for i = 1:length(south_idx)
+    si = south_idx(i);
+    r_south(i) = corr(DBi_adjusted(:, si), ssh_south_mm, 'Rows','complete');
+end
+
+% Optional: standard error
+nobs = size(DBi_adjusted,1);
+se_north = sqrt((1 - r_north.^2) ./ max(nobs-2,1));
+se_south = sqrt((1 - r_south.^2) ./ max(nobs-2,1));
+
+% Combine results
+r_all = [r_north; r_south];
+se_all = [se_north; se_south];
+site_labels = [T.Name(north_idx); T.Name(south_idx)];
+group = [repmat("North", length(north_idx),1); repmat("South", length(south_idx),1)];
+
+% Create figure
+figure('Units','inches','Position',[1 1 12 5],'Color','w'); 
+hold on;
+
+barWidth = 0.4;  % width of each bar
+offset = 0.15;   % offset for grouped bars
+
+% Create dummy bars for legend
+hNorth = bar(NaN, NaN, 'FaceColor', northColor, 'EdgeColor', 'k');
+hSouth = bar(NaN, NaN, 'FaceColor', southColor, 'EdgeColor', 'k');
+
+% Plot actual bars
+for i = 1:length(r_all)
+    if group(i) == "North"
+        x = i - offset;
+        c = northColor;
+    else
+        x = i + offset;
+        c = southColor;
+    end
+    bar(x, r_all(i), barWidth, 'FaceColor', c, 'EdgeColor', 'k');
+    
+    % Add error bar
+    errorbar(x, r_all(i), se_all(i), 'k', 'LineStyle','none', 'LineWidth',1);
+end
+
+xticks(1:length(r_all));
+xticklabels(site_labels);
+xtickangle(45);
+
+ylabel('Correlation coefficient (r)', 'FontSize',12,'FontWeight','bold');
+xlabel('Stations', 'FontSize', 12, 'FontWeight', 'bold');
+
+set(gca,'FontSize',10,'LineWidth',1,'Box','off','TickDir','out',...
+    'GridLineStyle','--','YGrid','on');
+
+legend([hNorth, hSouth], {'North sites','South sites'}, 'Location','northeast','Box','off');
+xlim([0 length(r_all)+1]);
+
+title('Correlation between adjusted Tide Gauges and Satellite SSH', 'FontWeight','bold');
+
+%% Pick best-correlated TG sites and safely fill gaps
+% Site indices
+fern_idx  = 3;
+woods_idx = 29;
+sandy_idx = 21;
+
+% Initialize DBi_filled
+DBi_filled = DBi_match;
+
+for si = 1:ns
+    nan_idx = isnan(DBi_match(:,si));
+    Y = DBi_match(:,si);
+
+    % Choose corresponding SSH series
+    if ismember(si, south_sites)
+        X = ssh_south_mm;
+    else
+        X = ssh_north_mm;
+    end
+
+    X_valid = X(~nan_idx);
+    Y_valid = Y(~nan_idx);
+
+    % Only apply linear regression if enough valid points and X has variation
+    if length(X_valid) > 1 && range(X_valid) > 1e-6
+        mdl = fitlm(X_valid, Y_valid);
+        DBi_filled(nan_idx, si) = predict(mdl, X(nan_idx));
+    else
+        % Not enough variation or too few points: fallback to nearest fill
+        % DBi_filled(nan_idx) = fillmissing(Y, 'nearest');
+        DBi_filled(nan_idx, si) = fillmissing(Y, 'nearest');
+    end
+end
+
+% Fill any remaining NaNs at start/end with nearest value
+DBi_filled = fillmissing(DBi_filled, 'nearest');
+
+% Extract filled TG series for key stations (1993–2022)
+tg_fern  = DBi_filled(:, fern_idx);
+tg_woods = DBi_filled(:, woods_idx);
+tg_sandy = DBi_filled(:, sandy_idx);
+
+% Optional: check if any NaNs remain
+if any(isnan(DBi_filled(:)))
+    warning('Some NaNs remain in the filled TG dataset.');
+else
+    disp('All TG gaps successfully filled.');
+end
+
+%% Calculate linear trends in the south and north
+trend_tg_fern = polyfit(ssh_years', tg_fern, 1);
+trend_tg_woods = polyfit(ssh_years', tg_woods, 1);
+trend_tg_sandy = polyfit(ssh_years', tg_sandy, 1);
+
+%%
+% Compute trend offsets bw TG and Satelite SSH in the S & N
+tg_fern_offset  = trend_tg_fern(1) - trend_ssh_south(1);  % South site
+tg_woods_offset  = trend_tg_woods(1) - trend_ssh_north(1);  % South site
+tg_sandy_offset  = trend_tg_sandy(1) - trend_ssh_north(1);  % South site
+
+% Time offset relative to 1993
+t0 = ssh_years(1);
+dt = (ssh_years(:) - t0);  % column vector
+
+% Adjust TG 
+tg_fern_adj      = tg_fern - tg_fern_offset.* dt;
+tg_woods_adj      = tg_woods - tg_woods_offset.* dt;
+tg_sandy_adj      = tg_sandy - tg_sandy_offset.* dt;
+
+% compute TG and SSH gradient
+tg_gradient_fern_sandy  = tg_fern_adj - tg_sandy_adj;  %fern-sandy
+tg_gradient_fern_woods = tg_fern_adj - tg_woods_adj;   %fern-woods
+tg_gradient_SSH         = ssh_south_mm - ssh_north_mm;
+SSH_grad = tg_gradient_SSH;
+%%
+% save('TG_adjstd_SSH.mat', ...
+%      'tg_gradient_fern_sandy', 'tg_fern_adj', ...
+%      'tg_sandy_adj', 'tg_gradient_SSH','ssh_south_mm','ssh_north_mm');
+%%
+load('amoc_zos_indices.mat');    % zos_Obs_coast_index (1993–2013)
+load('ref_ssh_trimmed.mat');     % Copernicus AMOC (1993–2013)
+
+%% Define year range
+TG_years=1880:2025;
+years = 1993:2022;
+yr_start = 1993;
+yr_end = 2013;
+ind = years >= yr_start & years <= yr_end;
+years_sub = years(ind);
+t = (yr_start:yr_end)';
+t_full     = years(:);   
+
+%% select overlapping years with copernicus 1993-2013
+s_sub_adj=tg_fern_adj(ind); 
+s_sub=tg_fern(ind);   
+n_sub_adj=tg_sandy_adj(ind);  
+n_sub=tg_sandy(ind);
+s_SSH=ssh_south_mm(ind); 
+n_SSH=ssh_north_mm(ind); 
+
+tg_gradient_adj  = s_sub_adj - n_sub_adj;  %fern-sandy
+tg_gradient = s_sub - n_sub;   %fern-woods
+ssh_grad        = s_SSH - n_SSH;
+
+%% Fit scaling from SSH gradient to AMOC in Sv
+k = regress(ref_ssh_trimmed', ssh_grad);
+amoc_obs_from_tg = k * tg_gradient_adj;
+
+%% Compute correlation coefficients
+R_north        = corr(n_SSH, n_sub);         % SSH vs TG North
+R_north_adj    = corr(n_SSH, n_sub_adj);        % SSH vs Adjusted TG North
+R_south        = corr(s_SSH, s_sub);         % SSH vs TG South
+R_south_adj    = corr(s_SSH, s_sub_adj);        % SSH vs Adjusted TG South
+%
+figure('Position', [100, 100, 800, 500]);  % Wider figure for legend
+
+hold on;
+plot(t, n_SSH, '-', 'Color', [0.00, 0.45, 0.74], 'LineWidth', 1.8, 'DisplayName', 'SSH North');
+plot(t, n_sub, '--', 'Color', [0.00, 0.45, 0.74], 'LineWidth', 1.5, 'DisplayName', 'TG North');
+plot(t, n_sub_adj, ':', 'Color', [0.00, 0.45, 0.74], 'LineWidth', 2.5, 'DisplayName', 'TG North Adjusted');
+
+plot(t, s_SSH, '-', 'Color', [0.85, 0.33, 0.10], 'LineWidth', 1.8, 'DisplayName', 'SSH South');
+plot(t, s_sub, '--', 'Color', [0.85, 0.33, 0.10], 'LineWidth', 1.5, 'DisplayName', 'TG South');
+plot(t, s_sub_adj, ':', 'Color', [0.85, 0.33, 0.10], 'LineWidth', 2.5, 'DisplayName', 'TG South Adjusted');
+
+xlabel('Year', 'FontSize', 12);
+ylabel('Sea Level (mm)', 'FontSize', 12);
+title('Tide Gauge vs Satellite SSH (North & South)', 'FontSize', 14);
+legend('NumColumns', 3, 'Location', 'northoutside', 'Orientation', 'horizontal', 'Box', 'off');
+
+% Annotate correlation values
+x_pos = t(1) + 1;
+y_pos_top = max([n_SSH; n_sub; n_sub_adj]) + 10;
+y_pos_bottom = min([s_SSH; s_sub; s_sub_adj]) - 20;
+
+text(x_pos, y_pos_top, sprintf('R (North vs TG) = %.2f\nR (North vs TG Adj) = %.2f', R_north, R_north_adj), ...
+    'Color', [0 0 0], 'FontSize', 10, 'VerticalAlignment', 'top');
+
+text(x_pos, y_pos_bottom, sprintf('R (South vs TG) = %.2f\nR (South vs TG Adj) = %.2f', R_south, R_south_adj), ...
+    'Color', [0 0 0], 'FontSize', 10, 'VerticalAlignment', 'bottom');
+
+grid on;box on
+set(gca, 'FontSize', 11, 'LineWidth', 1.2);
+box on;
+
+%% Plot SSH vs TG adjusted alone
+%% Correlations
+R_north_adj = corr(n_SSH, n_sub_adj,'rows','complete');
+R_south_adj = corr(s_SSH, s_sub_adj,'rows','complete');
+
+%% Plot SSH vs Adjusted Tide Gauges
+figure('Position',[100 100 800 500])
+
+hold on
+
+plot(t,n_SSH,'-','Color',[0.00 0.45 0.74],'LineWidth',1.8,'DisplayName','SSH North')
+plot(t,n_sub_adj,'--','Color',[0.00 0.45 0.74],'LineWidth',2.2,'DisplayName','TG North Adjusted')
+
+plot(t,s_SSH,'-','Color',[0.85 0.33 0.10],'LineWidth',1.8,'DisplayName','SSH South')
+plot(t,s_sub_adj,'--','Color',[0.85 0.33 0.10],'LineWidth',2.2,'DisplayName','TG South Adjusted')
+
+xlabel('Year','FontSize',12)
+ylabel('Sea Level (mm)','FontSize',12)
+title('Tide Gauge vs Satellite SSH','FontSize',14)
+
+legend('NumColumns',2,'Location','northoutside','Orientation','horizontal','Box','off')
+
+% Annotation
+x_pos = t(1)+1;
+y_pos_top = max([n_SSH; n_sub_adj])+10;
+y_pos_bottom = min([s_SSH; s_sub_adj])-20;
+
+text(x_pos,y_pos_top,sprintf('R (North vs TG Adj) = %.2f',R_north_adj),'FontSize',10)
+text(x_pos,y_pos_bottom,sprintf('R (South vs TG Adj) = %.2f',R_south_adj),'FontSize',10)
+
+grid on
+box on
+set(gca,'FontSize',11,'LineWidth',1.2)
+%% Correlation between SSH Gradient and Adjusted TG Gradient
+R_grad = corr(tg_gradient_adj, ssh_grad);
+% R_grad_AMOc =corr(amoc_obs_from_tg,ref_ssh_trimmed);
+
+figure('Position', [100, 100, 800, 500]);
+hold on; box on;
+
+% Color Definitions (Colorblind-friendly)
+amoc_color     = [0.00, 0.60, 0.30];  % Green
+tg_amoc_color  = [0.10, 0.10, 0.10];  % Black
+tg_grad_color  = [0.30, 0.45, 0.90];  % Blue
+ssh_grad_color = [0.85, 0.33, 0.10];  % Red
+
+% Plot: Left Y-Axis (AMOC in Sv)
+yyaxis left
+plot(t, ref_ssh_trimmed, '-', 'Color', amoc_color, 'LineWidth', 2.2, ...
+    'DisplayName', 'Observed AMOC');
+plot(t, amoc_obs_from_tg, '--', 'Color', tg_amoc_color, 'LineWidth', 2.2, ...
+    'DisplayName', 'TG-Based AMOC Estimate');
+ylabel('AMOC Strength (Sv)', 'FontSize', 12);
+
+% Plot: Right Y-Axis (SSH Gradient)
+yyaxis right
+plot(t, tg_gradient_adj, ':', 'Color', tg_grad_color, 'LineWidth', 2.2, ...
+    'DisplayName', 'Adjusted TG Gradient');
+plot(t, ssh_grad, '-', 'Color', ssh_grad_color, 'LineWidth', 2.2, ...
+    'DisplayName', 'SSH-Based ZOS Coast Index');
+ylabel('SSH Gradient (mm)', 'FontSize', 12);
+
+% Common Settings
+xlabel('Year', 'FontSize', 12);
+title('AMOC and SSH Gradient from Tide Gauges and Satellite', 'FontSize', 14);
+grid on;
+
+% Axes formatting
+set(gca, 'FontSize', 11, 'LineWidth', 1.2);
+yyaxis left
+set(gca, 'YColor', amoc_color);
+yyaxis right
+set(gca, 'YColor', ssh_grad_color);
+
+% Legend formatting (multi-column, clean)
+legend('Location', 'northoutside', ...
+       'Orientation', 'horizontal', ...
+       'NumColumns', 2, ...
+       'Box', 'off', ...
+       'FontSize', 10);
+% --- calculate positions for annotation AFTER plotting ---
+yl = ylim;   % get current axis limits
+y_pos_top    = yl(2) - 0.1*(yl(2)-yl(1));
+y_pos_bottom = yl(1) + 0.1*(yl(2)-yl(1));
+
+% Annotate gradient correlation
+x_corr = t(1) + 1;
+y_corr = max(ssh_grad) - 5;  % Adjust as needed
+yyaxis right
+text(x_corr, y_corr, sprintf('R (SSH vs TG Gradient) = %.2f', R_grad), ...
+    'Color', ssh_grad_color, 'FontSize', 10, 'VerticalAlignment', 'top');
+
+grid on;box on
+
+set(gca, 'FontSize', 11, 'LineWidth', 1.2);
+box on;
+%% Apply for longer TG years (1880-2025) using DBi_annual
+% --- Step 1: Fill DBi_annual (1880–2025) using SSH overlap ---
+DBi_filled = DBi_annual;   % Copy input
+
+SSH_years = 1993:2022;                     % Exact SSH coverage
+idx_overlap = ismember(TG_years, SSH_years);  % Indices in TG_years
+
+for si = 1:ns
+    y_full = DBi_annual(:,si);            % Full TG series for this site
+    
+    % Only fill NaNs
+    nan_idx_full = isnan(y_full);
+    if all(~nan_idx_full)
+        continue  % No NaNs, skip this site
+    end
+    
+    % Extract TG for overlap years
+    y_overlap = y_full(idx_overlap);
+    nan_overlap = isnan(y_overlap);
+    
+    % Select corresponding SSH series
+    if ismember(si, south_sites)
+        X_overlap = ssh_south_mm;   % Should be length(SSH_years)
+    else
+        X_overlap = ssh_north_mm;
+    end
+    
+    % Training data: only valid points
+    X_reg = X_overlap(~nan_overlap);
+    Y_reg = y_overlap(~nan_overlap);
+    
+    % Apply regression only if enough valid points and X has variation
+    MinPoints = 3;
+    MinRange  = 1e-6;
+    if length(X_reg) >= MinPoints && range(X_reg) > MinRange
+        % Robust regression
+        b = robustfit(X_reg, Y_reg);
+        Y_pred_overlap = b(1) + b(2).*X_overlap;
+        
+        % Only fill NaNs in overlap years
+        fill_idx = nan_overlap;
+        y_overlap(fill_idx) = Y_pred_overlap(fill_idx);
+        
+        % Replace back into full series
+        y_full(idx_overlap) = y_overlap;
+    end
+    
+    % Fill any remaining NaNs outside overlap using nearest
+    y_full = fillmissing(y_full, 'nearest');
+    
+    % Save filled TG
+    DBi_filled(:,si) = y_full;
+end
+
+disp('All TG gaps successfully filled (1880–2025).');
+
+%% --- Step 2: Extract key stations ---
+tg_fern_full  = DBi_filled(:, fern_idx);
+tg_woods_full = DBi_filled(:, woods_idx);
+tg_sandy_full = DBi_filled(:, sandy_idx);
+
+%% --- Step 3: Apply offsets ---
+tg_fern_adj_full  = tg_fern_full;
+tg_sandy_adj_full = tg_sandy_full;
+
+if ~isnan(tg_fern_offset)
+    tg_fern_adj_full  = tg_fern_full - tg_fern_offset * (TG_years - TG_years(1))';
+end
+if ~isnan(tg_sandy_offset)
+    tg_sandy_adj_full = tg_sandy_full - tg_sandy_offset * (TG_years - TG_years(1))';
+end
+
+%% --- Step 4: Compute TG gradient ---
+tg_grad_adj_full = tg_fern_adj_full - tg_sandy_adj_full;
+tg_grad_adj_full = fillmissing(tg_grad_adj_full, 'nearest');
+
+disp('TG gradient successfully computed for 1880–2025.');
+%%
+amoc_obs_from_tg_full = k * tg_grad_adj_full;
+
+%% --- Step 5: Visualization (GRL-ready) ---
+figure('Position',[100,100,900,600]); 
+t = tiledlayout(2,1,'TileSpacing','compact','Padding','compact');
+
+% (a) Fern & Sandy TG
+nexttile; hold on;
+plot(TG_years, tg_fern_adj_full, '-', 'Color',[0.00 0.45 0.74], 'LineWidth', 1.8, 'DisplayName','Fern (adjusted)');
+plot(TG_years, tg_sandy_adj_full,'-', 'Color',[0.85 0.33 0.10], 'LineWidth', 1.8, 'DisplayName','Sandy (adjusted)');
+xlim([1940 2020]);
+
+ylabel('Sea level (mm)','FontSize',12);
+title('(a) Fern and Sandy TG series (1880–2025)','FontWeight','bold','FontSize',13);
+legend('Location','northwest','Box','off','FontSize',10);
+set(gca,'FontSize',11,'LineWidth',1,'Box','on','Layer','top','TickDir','out','YMinorTick','on','XMinorTick','on');
+
+% (b) TG gradient vs SSH + AMOC
+nexttile; hold on;
+
+yyaxis left
+p1 = plot(TG_years, tg_grad_adj_full, '-', 'Color',[0.49 0.18 0.56], 'LineWidth', 1.8, 'DisplayName','TG Fern − Sandy (adj)');
+p2 = plot(SSH_years, SSH_grad, '-', 'Color',[0 0.45 0.74], 'LineWidth', 2.0, 'DisplayName','SSH-based gradient');
+ylabel('TG & SSH Gradient (mm)','FontSize',12);
+
+yyaxis right
+p3 = plot(TG_years, amoc_obs_from_tg_full, '-', 'Color',[0.10 0.10 0.10], 'LineWidth', 1.8, 'DisplayName','AMOC (obs-TG)');
+ylabel('AMOC Strength (Sv)','FontSize',12);
+
+xlim([1940 2020]); 
+yline(0,'k--','LineWidth',1);
+
+xlabel('Year','FontSize',12);
+title('(b) TG Gradient vs SSH Gradient and AMOC','FontWeight','bold','FontSize',13);
+
+% Unify legend
+legend([p1 p2 p3],{'TG Fern−Sandy','SSH gradient','TG based AMOC estimate)'},...
+       'Location','northwest','Box','off','FontSize',10);
+
+set(gca,'FontSize',11,'LineWidth',1,'Box','on','Layer','top','TickDir','out','YMinorTick','on','XMinorTick','on');
+
+...
+set(gca,'FontSize',11,'LineWidth',1,'Box','on','Layer','top','TickDir','out','YMinorTick','on','XMinorTick','on');
+
+% --- Correlation annotation (Fern−Sandy TG vs SSH gradient overlap) ---
+[common_years, ia, ib] = intersect(TG_years, SSH_years);
+[Rmat, Pmat] = corrcoef(tg_grad_adj_full(ia), SSH_grad(ib), 'Rows','complete');
+R_grad = Rmat(1,2); 
+p_grad = Pmat(1,2);
+
+if p_grad < 0.001
+    p_str = 'p < 0.001';
+else
+    p_str = sprintf('p = %.3f', p_grad);
+end
+
+% Make sure annotation goes into panel (b)
+nexttile(2); hold on;
+yyaxis left  % anchor relative to SSH/TG gradient axis
+x_corr = min(common_years) + 2;  
+y_corr = max(SSH_grad) - 0.05*range(SSH_grad);  
+text(x_corr, y_corr, sprintf('R = %.2f, %s', R_grad, p_str), ...
+    'Color',[0 0.45 0.74], 'FontSize',11, 'FontWeight','bold', ...
+    'VerticalAlignment','top');
+
+%% Save the full TG index and the TG based AMOC estimates for 1880-2025
+save('TG_adjstd_SSH.mat', ...
+     'tg_fern_adj_full', 'tg_sandy_adj_full','tg_grad_adj_full','amoc_obs_from_tg_full','TG_years');
+%%
+load('TG_adjstd_SSH.mat');
+%
+a = tg_grad_adj_full;%highest correlation in South and North
+
+figure
+hold on; box on;
+% subplot(2,1,2)
+plot(TG_years,a,'k.-');
+i_smooth = movmean(a, 7, 'omitnan');
+plot(TG_years, i_smooth, 'r', 'LineWidth', 3);
+% ylim([-100 100]);
+xlim([1940 2025])
+title('Fernandina minus Sandy Hook');
+plot(xlim,[0 0],'k')
+xlabel('Year')
+ylabel('mm')
