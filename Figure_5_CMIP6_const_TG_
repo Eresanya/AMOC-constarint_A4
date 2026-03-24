@@ -72,7 +72,8 @@ AMOC_un  = AMOC_un_std(model_mask);
 tg_zos_raw = movmean(tg_grad_adj_full,7,'omitnan'); %TG index (TG zoscoast)
 tg_zos_raw = tg_zos_raw(tg_mask); %TG index 1940-2014
 
-tg_amoc_raw = movmean(amoc_obs_from_tg_full,7,'omitnan'); %TG AMOC estimate
+%tg_amoc_raw = movmean(amoc_obs_from_tg_full,7,'omitnan'); %TG AMOC estimate
+tg_amoc_raw = movmean(tg_grad_adj_full,7,'omitnan'); %TG AMOC estimate
 tg_amoc_raw = tg_amoc_raw(tg_mask); %TG index 1940-2014
 
 time_common = datetime(target_years,1,1);
@@ -85,7 +86,7 @@ tg_amoc_std = (tg_amoc_raw - mean(tg_amoc_raw,'omitnan')) ./ ...
                std(tg_amoc_raw,'omitnan');
 
 % Scale Zoscoast index to match TG varianceclc
-% scale_factor = std(tg_zos_raw, 'omitnan') / std(tg_amoc_raw, 'omitnan');
+%scale_factor = std(tg_zos_raw, 'omitnan') / std(tg_amoc_raw, 'omitnan');
 % tg_scaled = tg_zos_raw * scale_factor;
 % 
 % % Scale TG based AMOC index to match CMIP6 AMOC index
