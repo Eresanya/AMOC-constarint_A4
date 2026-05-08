@@ -184,8 +184,8 @@ clearvars -except time_common tg_amoc_std amoc_tg_smooth ...
 time_num = year(time_common);
 
 % --- Define periods --------------------------------
-period1_mask = (time_num >= 1950) & (time_num <= 1990);
-period2_mask = (time_num > 1990);
+period1_mask = time_num >= 1950 & time_num <= 1990;
+period2_mask = time_num > 1990 & time_num <= 2014;
 
 t_p1 = time_num(period1_mask);
 t_p2 = time_num(period2_mask);
@@ -417,10 +417,10 @@ set(gca,...
 % =========================================================
 % PERIOD DEFINITIONS
 % =========================================================
-
-p1 = time_num >= 1950 & time_num <= 1990;
-p2 = time_num >= 1990 & time_num <= 2014;
-
+% period1_mask = time_num >= 1950 & time_num <= 1990;
+% period2_mask = time_num > 1990 & time_num <= 2014;
+p1 = period1_mask;
+p2 = period2_mask;
 % =========================================================
 % PERIOD 1 (1950–1990)
 % =========================================================
