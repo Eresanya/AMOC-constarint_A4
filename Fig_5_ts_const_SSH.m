@@ -210,11 +210,11 @@ un_trend_p1  = polyfit(t_p1, un_p1, 1);
 un_trend_p2  = polyfit(t_p2, un_p2, 1);
 
 % --- Trend differences & correlations -------------
-delta_con_p1 = tg_trend_p1(1) - con_trend_p1(1);
-delta_con_p2 = tg_trend_p2(1) - con_trend_p2(1);
+% delta_con_p1 = tg_trend_p1(1) - con_trend_p1(1);
+% delta_con_p2 = tg_trend_p2(1) - con_trend_p2(1);
 
-delta_un_p1 = tg_trend_p1(1) - un_trend_p1(1);
-delta_un_p2 = tg_trend_p2(1) - un_trend_p2(1);
+% delta_un_p1 = tg_trend_p1(1) - un_trend_p1(1);
+% delta_un_p2 = tg_trend_p2(1) - un_trend_p2(1);
 % 
 r_con_p1 = corr(tg_p1, con_p1,'rows','complete');
 r_con_p2 = corr(tg_p2, con_p2,'rows','complete');
@@ -414,6 +414,165 @@ set(gca,...
     'FontName','Helvetica',...
     'TickLength',[0.015 0.015]);
 
+%% =========================================================
+% TG–Constrained CMIP6 AMOC Relationship
+% =========================================================
+figure('Color','w','Position',[100 100 1050 520]);
+hold on;
+
+% ---------------------------------------------------------
+% COLOR PALETTE
+% ---------------------------------------------------------
+col_obs = [0.15 0.15 0.15];
+col_con = [0.85 0.45 0.10];
+
+% ---------------------------------------------------------
+% AXIS LIMITS
+% ---------------------------------------------------------
+yl = [ ...
+    min([amoc_tg_smooth; amoc_con_smooth]) - 0.3,...
+    max([amoc_tg_smooth; amoc_con_smooth]) + 0.3];
+
+xlim([1940 2014]);
+
+% ---------------------------------------------------------
+% PERIOD SHADING
+% ---------------------------------------------------------
+patch([1950 1990 1990 1950],...
+      [yl(1) yl(1) yl(2) yl(2)],...
+      [0.93 0.93 0.93],...
+      'EdgeColor','none',...
+      'FaceAlpha',0.35);
+
+patch([1990 2014 2014 1990],...
+      [yl(1) yl(1) yl(2) yl(2)],...
+      [0.97 0.97 0.97],...
+      'EdgeColor','none',...
+      'FaceAlpha',0.40);
+
+% ---------------------------------------------------------
+% ENSEMBLE SPREAD (CONSTRAINED ONLY)
+% ---------------------------------------------------------
+t = time_num(:);
+
+fill([t; flipud(t)], ...
+     [amoc_con_smooth(:) - AMOC_con_spread_s(:); ...
+      flipud(amoc_con_smooth(:) + AMOC_con_spread_s(:))], ...
+      col_con,...
+      'FaceAlpha',0.15,...
+      'EdgeColor','none');
+
+% ---------------------------------------------------------
+% MAIN TIME SERIES
+% ---------------------------------------------------------
+h1 = plot(time_num, amoc_tg_smooth,...
+    'Color', col_obs,...
+    'LineWidth', 2.6);
+
+h2 = plot(time_num, amoc_con_smooth,...
+    '--',...
+    'Color', col_con,...
+    'LineWidth', 2.4);
+
+% ---------------------------------------------------------
+% TREND LINES
+% ---------------------------------------------------------
+plot(t_p1, polyval(tg_trend_p1, t_p1),...
+    '-',...
+    'Color', col_obs,...
+    'LineWidth', 1.2);
+
+plot(t_p1, polyval(con_trend_p1, t_p1),...
+    '--',...
+    'Color', col_con,...
+    'LineWidth', 1.2);
+
+plot(t_p2, polyval(tg_trend_p2, t_p2),...
+    ':',...
+    'Color', col_obs,...
+    'LineWidth', 1.6);
+
+plot(t_p2, polyval(con_trend_p2, t_p2),...
+    ':',...
+    'Color', col_con,...
+    'LineWidth', 1.6);
+
+% ---------------------------------------------------------
+% REFERENCE LINES
+% ---------------------------------------------------------
+yline(0,...
+    ':',...
+    'Color',[0.4 0.4 0.4],...
+    'LineWidth',1);
+
+xline(1950,...
+    ':',...
+    'Color',[0.55 0.55 0.55],...
+    'LineWidth',1);
+
+xline(1990,...
+    ':',...
+    'Color',[0.55 0.55 0.55],...
+    'LineWidth',1);
+
+% ---------------------------------------------------------
+% LABELS
+% ---------------------------------------------------------
+xlabel('Year',...
+    'FontSize',14,...
+    'FontWeight','bold');
+
+ylabel('Standardized AMOC Index',...
+    'FontSize',14,...
+    'FontWeight','bold');
+
+title('TG–Constrained CMIP6 AMOC Relationship (1940–2014)',...
+    'FontSize',16,...
+    'FontWeight','bold');
+
+% ---------------------------------------------------------
+% LEGEND
+% ---------------------------------------------------------
+legend([h1 h2],...
+    {'TG-derived AMOC',...
+     'Constrained CMIP6'},...
+    'Location','northwest',...
+    'Box','off',...
+    'FontSize',11);
+
+% ---------------------------------------------------------
+% CORRELATION (CONSTRAINED ONLY)
+% ---------------------------------------------------------
+text(1943,2.05,...
+    sprintf('r = %.2f', r_con_p2),...
+    'FontSize',10,...
+    'FontWeight','bold',...
+    'Color', col_con,...
+    'BackgroundColor','w',...
+    'Margin',3);
+
+% ---------------------------------------------------------
+% AXIS STYLING
+% ---------------------------------------------------------
+ax = gca;
+
+ax.FontSize  = 12;
+ax.LineWidth = 1.2;
+ax.TickDir   = 'out';
+ax.Box       = 'on';
+
+ax.XLim = [1940 2014];
+ax.YLim = [-2.5 2.5];
+
+ax.Layer = 'top';
+
+grid on;
+grid minor;
+
+set(gca,...
+    'FontName','Helvetica',...
+    'TickLength',[0.015 0.015]);
+
 % =========================================================
 % PERIOD DEFINITIONS
 % =========================================================
@@ -421,6 +580,20 @@ set(gca,...
 % period2_mask = time_num > 1990 & time_num <= 2014;
 p1 = period1_mask;
 p2 = period2_mask;
+
+% =========================================================
+% TG TRENDS
+% =========================================================
+
+tg_series = amoc_tg_smooth(:);
+time_vec  = time_num(:);
+
+coef_tg_p1 = polyfit(time_vec(p1), tg_series(p1), 1);
+tg_trend_p1 = coef_tg_p1(1);
+
+coef_tg_p2 = polyfit(time_vec(p2), tg_series(p2), 1);
+tg_trend_p2 = coef_tg_p2(1);
+
 % =========================================================
 % PERIOD 1 (1950–1990)
 % =========================================================
@@ -499,125 +672,8 @@ fprintf('Constrained:   r = %.2f | trend = %.3f | RMSE = %.3f\n', ...
 fprintf('Unconstrained: r = %.2f | trend = %.3f | RMSE = %.3f\n', ...
         r_un_p2, trend_un_p2, rmse_un_p2);
 
-%% =========================================================
-% PUBLICATION-STYLE FIGURE (TG + CONSTRAINED CMIP6 ONLY)
-% =========================================================
+fprintf('\n===== TG TRENDS =====\n');
+fprintf('1950–1990: trend = %.4f per year\n', tg_trend_p1);
+fprintf('1990–2014: trend = %.4f per year\n', tg_trend_p2);
 
-figure('Color','w','Position',[100 100 1050 520]);
-hold on;
 
-% ---------------------------------------------------------
-% COLOR PALETTE
-% ---------------------------------------------------------
-col_obs = [0.15 0.15 0.15];
-col_con = [0.85 0.45 0.10];
-
-% ---------------------------------------------------------
-% AXIS LIMITS
-% ---------------------------------------------------------
-yl = [ ...
-    min([amoc_tg_smooth; amoc_con_smooth]) - 0.3, ...
-    max([amoc_tg_smooth; amoc_con_smooth]) + 0.3];
-
-xlim([1940 2014]);
-
-% ---------------------------------------------------------
-% PERIOD SHADING
-% ---------------------------------------------------------
-patch([1950 1990 1990 1950], ...
-      [yl(1) yl(1) yl(2) yl(2)], ...
-      [0.93 0.93 0.93], ...
-      'EdgeColor','none','FaceAlpha',0.35);
-
-patch([1990 2014 2014 1990], ...
-      [yl(1) yl(1) yl(2) yl(2)], ...
-      [0.97 0.97 0.97], ...
-      'EdgeColor','none','FaceAlpha',0.40);
-
-% ---------------------------------------------------------
-% ENSEMBLE SPREAD (CONSTRAINED ONLY)
-% ---------------------------------------------------------
-t = time_num(:);
-
-fill([t; flipud(t)], ...
-     [amoc_con_smooth(:) - AMOC_con_spread_s(:); ...
-      flipud(amoc_con_smooth(:) + AMOC_con_spread_s(:))], ...
-      col_con, ...
-      'FaceAlpha',0.15, ...
-      'EdgeColor','none');
-
-% ---------------------------------------------------------
-% MAIN TIME SERIES
-% ---------------------------------------------------------
-h1 = plot(time_num, amoc_tg_smooth, ...
-    'Color', col_obs, 'LineWidth', 2.6);
-
-h2 = plot(time_num, amoc_con_smooth, ...
-    '--', 'Color', col_con, 'LineWidth', 2.4);
-
-% ---------------------------------------------------------
-% TREND LINES
-% ---------------------------------------------------------
-plot(t_p1, polyval(tg_trend_p1, t_p1), ...
-    '-', 'Color', col_obs, 'LineWidth', 1.2);
-
-plot(t_p1, polyval(con_trend_p1, t_p1), ...
-    '--', 'Color', col_con, 'LineWidth', 1.2);
-
-plot(t_p2, polyval(tg_trend_p2, t_p2), ...
-    ':', 'Color', col_obs, 'LineWidth', 1.6);
-
-plot(t_p2, polyval(con_trend_p2, t_p2), ...
-    ':', 'Color', col_con, 'LineWidth', 1.6);
-
-% ---------------------------------------------------------
-% REFERENCE LINES
-% ---------------------------------------------------------
-yline(0, ':', 'Color', [0.4 0.4 0.4], 'LineWidth', 1);
-xline(1950, ':', 'Color', [0.55 0.55 0.55], 'LineWidth', 1);
-xline(1990, ':', 'Color', [0.55 0.55 0.55], 'LineWidth', 1);
-
-% ---------------------------------------------------------
-% LABELS
-% ---------------------------------------------------------
-xlabel('Year', 'FontSize', 14, 'FontWeight', 'bold');
-ylabel('Standardized AMOC Index', 'FontSize', 14, 'FontWeight', 'bold');
-title('TG–Constrained CMIP6 AMOC Relationship (1940–2014)', ...
-    'FontSize', 16, 'FontWeight', 'bold');
-
-% ---------------------------------------------------------
-% LEGEND
-% ---------------------------------------------------------
-legend([h1 h2], ...
-    {'TG-derived AMOC', 'Constrained CMIP6'}, ...
-    'Location', 'northwest', ...
-    'Box', 'off', ...
-    'FontSize', 11);
-
-% ---------------------------------------------------------
-% CORRELATION ANNOTATIONS
-% ---------------------------------------------------------
-text(1943, 2.05, sprintf('r = %.2f', r_con_p2), ...
-    'FontSize', 10, ...
-    'FontWeight', 'bold', ...
-    'Color', col_con, ...
-    'BackgroundColor', 'w', ...
-    'Margin', 3);
-
-% ---------------------------------------------------------
-% AXIS STYLING
-% ---------------------------------------------------------
-ax = gca;
-ax.FontSize  = 12;
-ax.LineWidth = 1.2;
-ax.TickDir   = 'out';
-ax.Box       = 'on';
-ax.Layer     = 'top';
-
-ax.XLim = [1940 2014];
-ax.YLim = [-2.5 2.5];
-
-grid on;
-grid minor;
-
-set(gca, 'FontName', 'Helvetica', 'TickLength', [0.015 0.015]);
